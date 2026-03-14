@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ question }} — Gabo Analysis</title>
+<style>
+/*
+ * @decision DEC-REPORT-003
+ * @title Single-file HTML with embedded CSS/JS; markdown rendered via python-markdown
+ * @status accepted
+ * @rationale Self-contained report requires no external dependencies. Markdown
+ * content from renderers is now processed by the Jinja2 `md` filter (python-markdown
+ * with tables + fenced_code extensions) instead of a naive newline-to-<br> replacement.
+ * This enables proper rendering of tables, bold, headers, and blockquotes produced
+ * by technique renderers.
+ */
+:root {
+  --blue-50: #eff6ff;
+  --blue-100: #dbeafe;
+  --blue-600: #2563eb;
+  --blue-700: #1d4ed8;
+  --blue-800: #1e40af;
+  --green-100: #dcfce7;
+  --green-600: #16a34a;
+  --green-700: #15803d;
+  --amber-100: #fef3c7;
+  --amber-600: #d97706;
+  --amber-700: #b45309;
+  --red-100: #fee2e2;
+  --red-600: #dc2626;
+  --red-700: #b91c1c;
+  --purple-100: #f3e8ff;
+  --purple-600: #9333ea;
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-300: #d1d5db;
+  --gray-400: #9ca3af;
+  --gray-500: #6b7280;
+  --gray-600: #4b5563;
+  --gray-700: #374151;
+  --gray-800: #1f2937;
+  --gray-900: #111827;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--gray-800);
+  background: #fff;
+  margin: 0;
+  padding: 0;
+}
+.container {
+  max-width: min(54rem, 100%);
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+h1, h2, h3, h4 { color: var(--gray-900); line-height: 1.3; }
+h1 { font-size: 2.25rem; margin: 0 0 0.5rem; }
+h2 { font-size: 1.75rem; margin: 2.5rem 0 1rem; border-bottom: 2px solid var(--gray-200); padding-bottom: 0.5rem; }
+h3 { font-size: 1.375rem; margin: 2rem 0 0.75rem; }
+a { color: var(--blue-600); text-decoration: none; }
+a:hover { text-decoration: underline; }
+p { margin: 0 0 1rem; }
+ul, ol { margin: 0 0 1rem; padding-left: 1.5rem; }
+li { margin-bottom: 0.25rem; }
+hr { border: none; border-top: 1px solid var(--gray-200); margin: 2rem 0; }
+code { font-family: var(--font-mono); font-size: 0.875em; background: var(--gray-100); padding: 0.15em 0.35em; border-radius: var(--radius-sm); }
+pre { background: var(--gray-100); padding: 1rem; border-radius: var(--radius-md); overflow-x: auto; }
+pre code { background: none; padding: 0; }
+
+/* Cover */
+.cover {
+  text-align: center;
+  padding: 3.5rem 2rem;
+  border-bottom: 3px solid var(--blue-600);
+  margin-bottom: 2rem;
+  background: linear-gradient(to bottom, var(--gray-50), #fff);
+}
+.cover h1 { font-size: 2.5rem; color: var(--gray-900); margin-bottom: 0.5rem; }
+.cover .meta { color: var(--gray-500); font-size: 0.9rem; }
+
+/* BLUF callout */
+.bluf {
+  border-left: 5px solid var(--blue-600);
+  background: var(--blue-50);
+  padding: 1.5rem 2rem;
+  margin: 1.5rem 0;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  font-size: 1.05rem;
+  line-height: 1.8;
+}
+.bluf h2 { border: none; margin: 0 0 0.75rem; padding: 0; font-size: 1.1rem; color: var(--blue-800); }
+
+/* Confidence badges */
+.badge {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.2rem 0.65rem;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
+.badge-high { background: var(--green-100); color: var(--green-700); }
+.badge-medium { background: var(--amber-100); color: var(--amber-700); }
+.badge-low { background: var(--red-100); color: var(--red-700); }
+
+/* Technique sections as cards */
+.technique-section {
+  background: #fff;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.technique-section.diagnostic { border-left: 4px solid var(--green-600); }
+.technique-section.contrarian { border-left: 4px solid var(--amber-600); }
+.technique-section.imaginative { border-left: 4px solid var(--purple-600); }
+
+/* Category tags */
+.technique-section .category-tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.5rem;
+}
+.diagnostic .category-tag { background: var(--green-100); color: var(--green-700); }
+.contrarian .category-tag { background: var(--amber-100); color: var(--amber-700); }
+.imaginative .category-tag { background: var(--purple-100); color: var(--purple-600); }
+
+/* Tables (top-level, e.g. artifact index) */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--gray-200);
+}
+th { background: var(--gray-100); font-weight: 600; color: var(--gray-700); }
+tr:nth-child(even) td { background: var(--gray-50); }
+
+/* Responsive table wrapper */
+.table-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 1rem 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--gray-200);
+}
+.table-responsive table { margin: 0; border: none; }
+
+/* Technique content — scoped styles for markdown-rendered HTML */
+.technique-content {
+  margin-top: 1rem;
+}
+.technique-content h4 {
+  font-size: 1.1rem;
+  margin: 1.5rem 0 0.5rem;
+  border-bottom: 1px solid var(--gray-200);
+  padding-bottom: 0.25rem;
+  color: var(--gray-900);
+}
+.technique-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.875rem;
+}
+.technique-content th {
+  background: var(--gray-100);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  color: var(--gray-700);
+}
+.technique-content td,
+.technique-content th {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--gray-200);
+  text-align: left;
+}
+.technique-content tr:nth-child(even) td { background: var(--gray-50); }
+.technique-content blockquote {
+  background: var(--gray-50);
+  border-left: 4px solid var(--gray-400);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  padding: 1rem 1.25rem;
+  font-style: italic;
+  margin: 1rem 0;
+  color: var(--gray-600);
+}
+.technique-content ul,
+.technique-content ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+.technique-content p {
+  margin: 0.5rem 0;
+}
+.technique-content strong { color: var(--gray-900); }
+
+/* Details/Summary */
+details { margin: 1rem 0; }
+summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--gray-700);
+  padding: 0.5rem 0;
+  list-style: none;
+}
+summary::before { content: "\25b6\00a0"; font-size: 0.8rem; color: var(--gray-500); transition: transform 0.2s; display: inline-block; }
+details[open] > summary::before { transform: rotate(90deg); }
+summary::-webkit-details-marker { display: none; }
+
+/* TOC */
+.toc { background: var(--gray-50); padding: 1rem 1.5rem; border-radius: var(--radius-md); margin: 1.5rem 0; }
+.toc ul { list-style: none; padding-left: 0; margin: 0; }
+.toc li { margin: 0.25rem 0; }
+.toc li li { padding-left: 1rem; }
+.toc a { color: var(--gray-600); }
+.toc a:hover { color: var(--blue-600); }
+
+/* Blockquote (top-level, Red Team memos outside technique-content) */
+blockquote {
+  border-left: 4px solid var(--gray-400);
+  margin: 1rem 0;
+  padding: 1rem 1.25rem;
+  color: var(--gray-600);
+  background: var(--gray-50);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-style: italic;
+}
+
+/* Findings list */
+.finding { margin: 0.75rem 0; padding: 0.5rem 0; }
+
+/* Footer */
+.footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--gray-200);
+  color: var(--gray-500);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* Intelligence Brief styles */
+.analytic-line {
+  border-left: 5px solid var(--green-600);
+  background: var(--green-100);
+  padding: 1.5rem 2rem;
+  margin: 1.5rem 0;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  font-size: 1.05rem;
+  line-height: 1.8;
+}
+.analytic-line h3 { color: var(--green-700); margin: 0 0 0.75rem; font-size: 1.1rem; border: none; padding: 0; }
+
+.counter-argument {
+  border-left: 5px solid var(--amber-600);
+  background: var(--amber-100);
+  padding: 1.5rem 2rem;
+  margin: 1.5rem 0;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  font-size: 1.05rem;
+  line-height: 1.8;
+}
+.counter-argument h3 { color: var(--amber-700); margin: 0 0 0.75rem; font-size: 1.1rem; border: none; padding: 0; }
+
+.confidence-bar {
+  display: flex;
+  gap: 0;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin: 1rem 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.confidence-bar > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  min-width: 2.5rem;
+}
+.confidence-bar .bar-high { background: var(--green-600); }
+.confidence-bar .bar-medium { background: var(--amber-600); }
+.confidence-bar .bar-low { background: var(--red-600); }
+
+.assessment-glance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+  padding: 1.25rem;
+  background: var(--gray-50);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--gray-200);
+}
+.assessment-glance .stat {
+  text-align: center;
+}
+.assessment-glance .stat-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--gray-900);
+  display: block;
+}
+.assessment-glance .stat-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gray-500);
+}
+
+.strongest-evidence {
+  background: var(--green-100);
+  border: 1px solid var(--green-600);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+  margin: 1.5rem 0;
+}
+.strongest-evidence h4 { color: var(--green-700); margin: 0 0 0.5rem; font-size: 1rem; }
+
+.missing-info {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+  margin: 1.5rem 0;
+}
+.missing-info h4 { color: var(--gray-600); margin: 0 0 0.5rem; font-size: 1rem; }
+
+/* Dark mode for iframe embedding */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --gray-50: #1a1a2e;
+    --gray-100: #16213e;
+    --gray-200: #2a2a4a;
+    --gray-300: #3a3a5a;
+    --gray-400: #6b7280;
+    --gray-500: #9ca3af;
+    --gray-600: #d1d5db;
+    --gray-700: #e5e7eb;
+    --gray-800: #f3f4f6;
+    --gray-900: #f9fafb;
+    --blue-50: #1e293b;
+    --blue-100: #1e3a5f;
+    --green-100: #1a2e1a;
+    --amber-100: #2e2a1a;
+    --red-100: #2e1a1a;
+    --purple-100: #2e1a3e;
+  }
+  body { background: #0f0f23; }
+  .cover { background: linear-gradient(to bottom, #1a1a2e, #0f0f23); }
+}
+
+/* Print */
+@media print {
+  body { font-size: 11pt; }
+  .container { max-width: 100%; padding: 0; }
+  .cover { padding: 1rem; border-bottom-width: 2px; }
+  @page { margin: 2cm; }
+  .toc { break-after: page; }
+  .technique-section details { display: block; }
+  .technique-section details > summary { display: none; }
+  .technique-section { break-inside: avoid; }
+  table { break-inside: avoid; }
+  a { color: inherit; }
+  h2 { break-after: avoid; }
+  .no-print { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<!-- Cover -->
+<div class="cover">
+  <h1>{{ question }}</h1>
+  <p class="meta">Gabo Analysis Report &mdash; {{ datetime }} &mdash; Run {{ run_id }}<br>
+  {{ techniques_completed }}/{{ techniques_selected }} techniques completed{% if adversarial_enabled %} with adversarial review{% endif %}{% if evidence_provided %} &middot; evidence provided{% endif %}</p>
+</div>
+
+<!-- Executive Summary -->
+<div class="bluf">
+  <h2>Executive Summary</h2>
+  {% if bottom_line_assessment %}
+  <p>{{ bottom_line_assessment }}</p>
+  {% else %}
+  <p><em>Synthesis not available &mdash; fewer than 2 techniques completed.</em></p>
+  {% endif %}
+</div>
+
+<!-- At a Glance -->
+{% if confidence_distribution %}
+<div class="assessment-glance">
+  <div class="stat">
+    <span class="stat-value">{{ total_techniques }}</span>
+    <span class="stat-label">Methods Used</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value">{{ key_findings|length }}</span>
+    <span class="stat-label">Findings</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value">{{ confidence_distribution.High }}</span>
+    <span class="stat-label">High Confidence</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value">{{ convergent_judgments|length }}</span>
+    <span class="stat-label">Points of Agreement</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value">{{ divergent_signals|length }}</span>
+    <span class="stat-label">Conflicting Signals</span>
+  </div>
+</div>
+{% endif %}
+
+<!-- TOC -->
+<nav class="toc no-print">
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#key-assessment">Key Assessment</a></li>
+    <li><a href="#challenges">Challenges to This View</a></li>
+    <li><a href="#confidence">Confidence</a></li>
+    <li><a href="#next-steps">Next Steps</a></li>
+    <li><a href="#methods">Methods Used</a></li>
+    <li><a href="#appendix-artifact-index">Appendix: Artifact Index</a></li>
+  </ul>
+</nav>
+
+<!-- Key Assessment -->
+<h2 id="key-assessment">Key Assessment</h2>
+
+{% if high_confidence_findings or medium_confidence_findings %}
+<h3>Supporting Evidence</h3>
+{% for finding in high_confidence_findings %}
+<div class="finding">
+  <span class="badge badge-high">HIGH CONFIDENCE</span>
+  <strong>{{ finding.technique_name }}</strong>: {{ finding.key_finding }}
+</div>
+{% endfor %}
+{% for finding in medium_confidence_findings %}
+<div class="finding">
+  <span class="badge badge-medium">MODERATE</span>
+  <strong>{{ finding.technique_name }}</strong>: {{ finding.key_finding }}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if convergent_judgments %}
+<h3>Points of Agreement</h3>
+<p>Multiple analytical methods reached the same conclusions in these areas:</p>
+<ol>
+{% for item in convergent_judgments %}
+  <li>{{ item }}</li>
+{% endfor %}
+</ol>
+{% endif %}
+
+{% if highest_confidence_assessments %}
+<div class="strongest-evidence">
+  <h4>Strongest Conclusions</h4>
+  <ul>
+  {% for item in highest_confidence_assessments %}
+    <li>{{ item }}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if not high_confidence_findings and not medium_confidence_findings and not convergent_judgments and not highest_confidence_assessments %}
+<p><em>No key assessment data available.</em></p>
+{% endif %}
+
+<!-- Challenges to This View -->
+<h2 id="challenges">Challenges to This View</h2>
+
+{% if divergent_signals %}
+<div class="counter-argument">
+  <h3>Where Methods Disagreed</h3>
+  <ol>
+  {% for item in divergent_signals %}
+    <li>{{ item }}</li>
+  {% endfor %}
+  </ol>
+</div>
+{% endif %}
+
+{% if low_confidence_findings %}
+<h3>Lower-Confidence Findings</h3>
+{% for finding in low_confidence_findings %}
+<div class="finding">
+  <span class="badge badge-low">LOW CONFIDENCE</span>
+  <strong>{{ finding.technique_name }}</strong>: {{ finding.key_finding }}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if remaining_uncertainties %}
+<h3>Open Questions</h3>
+<ul>
+{% for item in remaining_uncertainties %}
+  <li>{{ item }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% if intelligence_gaps %}
+<div class="missing-info">
+  <h4>Information Gaps</h4>
+  <ul>
+  {% for item in intelligence_gaps %}
+    <li>{{ item }}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if not divergent_signals and not low_confidence_findings and not remaining_uncertainties and not intelligence_gaps %}
+<p><em>No significant challenges or limitations identified.</em></p>
+{% endif %}
+
+<!-- Confidence -->
+<h2 id="confidence">Confidence</h2>
+
+{% if confidence_distribution %}
+{% set total = confidence_distribution.High + confidence_distribution.Medium + confidence_distribution.Low %}
+{% if total > 0 %}
+<div class="confidence-bar">
+  {% if confidence_distribution.High > 0 %}
+  <span class="bar-high" style="flex: {{ confidence_distribution.High }}">{{ confidence_distribution.High }} High</span>
+  {% endif %}
+  {% if confidence_distribution.Medium > 0 %}
+  <span class="bar-medium" style="flex: {{ confidence_distribution.Medium }}">{{ confidence_distribution.Medium }} Mod</span>
+  {% endif %}
+  {% if confidence_distribution.Low > 0 %}
+  <span class="bar-low" style="flex: {{ confidence_distribution.Low }}">{{ confidence_distribution.Low }} Low</span>
+  {% endif %}
+</div>
+<p>This analysis produced <strong>{{ total }}</strong> findings across <strong>{{ total_techniques }}</strong> methods.
+{% if confidence_distribution.High > confidence_distribution.Low %}
+Most findings are well-supported, giving this assessment a solid foundation. {{ confidence_distribution.Low }} finding{{ "s" if confidence_distribution.Low != 1 }} {{ "have" if confidence_distribution.Low != 1 else "has" }} lower confidence and should be treated with caution.
+{% elif confidence_distribution.Low > confidence_distribution.High %}
+Many findings have lower confidence, meaning significant uncertainty remains. Treat these conclusions as preliminary and prioritize closing the information gaps listed above.
+{% else %}
+Confidence is mixed across findings. The core conclusions are supported, but several areas remain uncertain.
+{% endif %}
+</p>
+{% else %}
+<p><em>No confidence data available.</em></p>
+{% endif %}
+{% else %}
+<p><em>No confidence data available.</em></p>
+{% endif %}
+
+<!-- Next Steps -->
+<h2 id="next-steps">Next Steps</h2>
+
+{% if recommended_next_steps %}
+<ol>
+{% for item in recommended_next_steps %}
+  <li>{{ item }}</li>
+{% endfor %}
+</ol>
+{% endif %}
+
+{% if intelligence_gaps %}
+<div class="missing-info">
+  <h4>Information to Gather</h4>
+  <p>Closing these gaps would strengthen the analysis:</p>
+  <ul>
+  {% for item in intelligence_gaps %}
+    <li>{{ item }}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if not recommended_next_steps and not intelligence_gaps %}
+<p><em>No recommended next steps.</em></p>
+{% endif %}
+
+<hr>
+
+<!-- Methods Used -->
+<h2 id="methods">Methods Used</h2>
+
+<p>This analysis applied {{ total_techniques }} structured analytical methods. Each method approaches the question from a different angle to reduce blind spots and cross-check conclusions. Full technique outputs are available as separate artifacts.</p>
+
+{% for t in techniques %}
+<div class="technique-section {{ t.category }}" id="{{ t.anchor }}">
+  <span class="category-tag">{{ t.category }}</span>
+  <h3>{{ t.name }}</h3>
+  {% if t.description %}
+  <p class="text-secondary"><em>{{ t.description }}</em></p>
+  {% endif %}
+  {% if t.summary %}
+  <p>{{ t.summary }}</p>
+  {% endif %}
+</div>
+{% endfor %}
+
+<h3>About This Analysis</h3>
+<p>Gabo applies structured analytical methods to any question. Rather than relying on a single approach, Gabo cross-checks findings across multiple complementary techniques, reducing the risk of bias and blind spots.</p>
+
+<h3>Method Categories</h3>
+<ul>
+{% for cat, desc in category_descriptions.items() %}
+  <li><strong>{{ cat | capitalize }}</strong>: {{ desc }}</li>
+{% endfor %}
+</ul>
+
+<hr>
+
+<!-- Appendix -->
+<h2 id="appendix-artifact-index">Appendix: Artifact Index</h2>
+<table>
+  <thead>
+    <tr><th>#</th><th>Technique</th><th>Category</th><th>File</th></tr>
+  </thead>
+  <tbody>
+    {% for a in artifacts %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ a.technique_name }}</td>
+      <td>{{ a.category }}</td>
+      <td><code>{{ a.markdown_path | basename }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Footer -->
+<div class="footer">
+  <p>Generated by Gabo</p>
+</div>
+
+</div>
+
+<script>
+// Expand all details before print
+window.addEventListener('beforeprint', function() {
+  document.querySelectorAll('details').forEach(function(d) { d.open = true; });
+});
+// Smooth scroll for TOC links
+document.querySelectorAll('a[href^="#"]').forEach(function(a) {
+  a.addEventListener('click', function(e) {
+    e.preventDefault();
+    var target = document.querySelector(a.getAttribute('href'));
+    if (target) target.scrollIntoView({ behavior: 'smooth' });
+  });
+});
+</script>
+
+</body>
+</html>

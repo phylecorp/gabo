@@ -1,0 +1,32 @@
+{
+  "name": "gabo-desktop",
+  "version": "0.1.0",
+  "description": "Gabo — structured analysis for any question",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "postinstall": "electron-builder install-app-deps",
+    "build:sidecar": "pyinstaller --name sat-api --onefile ../src/sat/api/app.py",
+    "build:mac": "npm run build && electron-builder --mac",
+    "build:mac:dir": "npm run build && electron-builder --mac --dir"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router": "^7.0.0",
+    "@tanstack/react-query": "^5.0.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-vite": "^3.0.0",
+    "electron-builder": "^25.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "typescript": "^5.7.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "@tailwindcss/vite": "^4.0.0"
+  }
+}

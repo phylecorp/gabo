@@ -1,0 +1,7 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "SAFETY: guard.sh crashed before completing safety checks. Command denied as precaution. Run: bash -n ~/.claude/hooks/guard.sh to diagnose."
+  }
+}

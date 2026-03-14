@@ -1,0 +1,33 @@
+appId: com.gabo.desktop
+productName: Gabo
+copyright: Copyright 2026
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**/*
+  - package.json
+
+extraResources:
+  - from: pyinstaller/dist/sat-api
+    to: sidecar/sat-api
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64]
+  icon: build/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

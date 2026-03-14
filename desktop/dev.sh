@@ -2,6 +2,13 @@
 # Start SAT Desktop in dev mode (FastAPI backend + Electron frontend)
 set -e
 
+NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
+if [ "$NODE_MAJOR" -ge 25 ]; then
+  echo "Error: Node $NODE_MAJOR is not supported. Use Node 20-24 LTS (see .nvmrc)."
+  echo "  nvm install 22 && nvm use 22"
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DESKTOP="$ROOT/desktop"
 API_PORT=8742

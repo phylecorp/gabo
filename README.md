@@ -12,6 +12,9 @@ Techniques are grouped into three categories: **Diagnostic** (test hypotheses ag
 
 ## Getting Started
 
+### Quickstart:
+run: ```./desktop/dev.sh```
+
 ### 1. Create a virtual environment
 
 SAT requires Python 3.11+. Use a virtual environment to keep dependencies isolated:

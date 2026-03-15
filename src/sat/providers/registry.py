@@ -34,9 +34,12 @@ def create_provider(
         from sat.providers.gemini import GeminiProvider
 
         provider = GeminiProvider(config)
+    elif config.provider == "copilot":
+        from sat.providers.copilot import CopilotProvider
+        provider = CopilotProvider(config)
     else:
         raise ValueError(
-            f"Unknown provider: {config.provider!r}. Available: anthropic, openai, gemini"
+            f"Unknown provider: {config.provider!r}. Available: anthropic, openai, gemini, copilot"
         )
 
     if rate_limiter is not None:

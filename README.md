@@ -296,6 +296,7 @@ sat_submit_synthesis         (submit; artifacts written to SAT_OUTPUT_DIR)
 | `anthropic` (default) | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
 | `openai` | `OPENAI_API_KEY` | `o3` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-pro` |
+| `copilot` | (none required) | `copilot-gpt-4` |
 
 Override the model per-provider with environment variables (`ANTHROPIC_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`) or with the `--model` / `--challenger-model` CLI flags.
 

@@ -37,6 +37,7 @@ DEFAULT_MODELS = {
     "anthropic": "claude-opus-4-6",
     "openai": "o3",
     "gemini": "gemini-2.5-pro",
+    "copilot": "copilot-gpt-4",
 }
 
 CHALLENGER_PREFERENCE = {
@@ -49,6 +50,7 @@ PROVIDER_API_KEY_ENVS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     "gemini": "GEMINI_API_KEY",
+    "copilot": None,
 }
 
 

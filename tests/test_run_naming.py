@@ -21,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sat.api.app import create_app
-from sat.api.evidence_manager import EvidenceSession, EvidenceSessionManager
+from sat.api.evidence_manager import EvidenceSession
 from sat.api.models import (
     AnalysisRequest,
     CuratedAnalysisRequest,
@@ -356,7 +356,6 @@ class TestRenameRunEndpoint:
         """PATCH should also update the in-process ActiveRun.name."""
         # Create an active run directly through the manager
         from sat.api.app import create_app
-        from sat.config import AnalysisConfig
 
         # Use the real app's run manager
         test_app = create_app(port=8742)

@@ -499,6 +499,160 @@ class TestConcurrencyEndpoints:
 
 
 # ---------------------------------------------------------------------------
+# RunManager: completed/failed run eviction (single source of truth)
+# ---------------------------------------------------------------------------
+
+class TestRunEvictionOnCompletion:
+    """Verify that completed and failed runs are evicted from _runs.
+
+    After eviction, the filesystem manifest is the sole source of truth,
+    preventing duplicate entries in the runs list API.
+    """
+
+    @pytest.mark.asyncio
+    async def test_completed_run_removed_from_runs_dict(self):
+        """A run that completes successfully must be evicted from _runs."""
+        manager = _make_manager()
+        run = manager.create_run(_make_config())
+        run_id = run.run_id
+
+        async def task_fn():
+            pass
+
+        manager.start_or_queue(run, task_fn)
+        await asyncio.sleep(0.05)
+
+        assert run.status == "completed"
+        # After eviction, get_run returns None
+        assert manager.get_run(run_id) is None
+        assert run_id not in [r.run_id for r in manager.list_active_runs()]
+
+    @pytest.mark.asyncio
+    async def test_failed_run_removed_from_runs_dict(self):
+        """A run that raises an exception must be evicted from _runs."""
+        manager = _make_manager()
+        run = manager.create_run(_make_config())
+        run_id = run.run_id
+
+        async def failing_task():
+            raise RuntimeError("boom")
+
+        manager.start_or_queue(run, failing_task)
+        await asyncio.sleep(0.05)
+
+        assert run.status == "failed"
+        assert manager.get_run(run_id) is None
+        assert run_id not in [r.run_id for r in manager.list_active_runs()]
+
+    @pytest.mark.asyncio
+    async def test_cancelled_run_stays_in_runs_dict(self):
+        """A cancelled run must NOT be evicted — it has no manifest to fall back to."""
+        manager = _make_manager()
+        done = asyncio.Event()
+        run = manager.create_run(_make_config())
+        run_id = run.run_id
+
+        async def slow_task():
+            await done.wait()
+
+        manager.start_or_queue(run, slow_task)
+        await asyncio.sleep(0)
+        assert run.status == "running"
+
+        manager.cancel_run(run_id)
+        await asyncio.sleep(0.05)
+
+        # Cancelled run stays in registry (no manifest to fall back to)
+        assert manager.get_run(run_id) is not None
+        assert manager.get_run(run_id).status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_queue_dequeue_still_works_after_eviction(self):
+        """Evicting the first run from _runs must not break queue promotion."""
+        manager = _make_manager(max_concurrent=1)
+        done_events = [asyncio.Event() for _ in range(2)]
+
+        run0 = manager.create_run(_make_config("q0"))
+        run1 = manager.create_run(_make_config("q1"))
+        run1_id = run1.run_id
+
+        async def task0(ev=done_events[0]):
+            await ev.wait()
+
+        async def task1(ev=done_events[1]):
+            await ev.wait()
+
+        manager.start_or_queue(run0, task0)
+        manager.start_or_queue(run1, task1)
+
+        await asyncio.sleep(0)
+        assert run1.status == "queued"
+
+        # Complete run0 — triggers eviction AND queue promotion
+        done_events[0].set()
+        await asyncio.sleep(0.05)
+
+        # run0 is evicted; run1 must be promoted to running
+        assert run0.status == "completed"
+        assert manager.get_run(run0.run_id) is None
+        assert run1.status == "running"
+        assert manager.get_run(run1_id) is not None  # run1 still active
+
+        done_events[1].set()
+        await asyncio.sleep(0.05)
+
+    @pytest.mark.asyncio
+    async def test_list_runs_no_duplicate_when_manifest_on_disk(self, tmp_path):
+        """GET /api/runs must return exactly one entry when a run has completed
+        (manifest on disk) and has been evicted from the active registry."""
+        import json
+        from datetime import datetime, UTC
+        from httpx import AsyncClient, ASGITransport
+        from fastapi import FastAPI
+        from sat.api.routes.runs import create_runs_router
+
+        manager = _make_manager()
+        run = manager.create_run(_make_config("no duplicates please"))
+        run_id = run.run_id
+
+        # Write a manifest on disk (simulating what the pipeline does)
+        sat_dir = tmp_path / f"sat-{run_id}"
+        sat_dir.mkdir()
+        manifest = {
+            "run_id": run_id,
+            "question": "no duplicates please",
+            "name": None,
+            "started_at": datetime.now(UTC).isoformat(),
+            "completed_at": datetime.now(UTC).isoformat(),
+            "techniques_selected": [],
+            "techniques_completed": [],
+            "evidence_provided": False,
+            "adversarial_enabled": False,
+            "providers_used": [],
+            "artifacts": [],
+            "synthesis_path": None,
+        }
+        (sat_dir / "manifest.json").write_text(json.dumps(manifest))
+
+        # Simulate the fix: evict the completed run from the active registry
+        run.status = "completed"
+        run.output_dir = str(sat_dir)
+        del manager._runs[run_id]
+
+        # list_runs should return exactly one entry (from filesystem only)
+        app = FastAPI()
+        app.include_router(create_runs_router(manager))
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get(f"/api/runs?dir={tmp_path}")
+            assert resp.status_code == 200
+            runs = resp.json()
+            assert len(runs) == 1, f"Expected 1 run, got {len(runs)}: {runs}"
+            assert runs[0]["run_id"] == run_id
+
+
+# ---------------------------------------------------------------------------
 # Docling thread offloading
 # ---------------------------------------------------------------------------
 

@@ -37,6 +37,7 @@ export class SatClient {
       const text = await res.text()
       throw new Error(`API error ${res.status}: ${text}`)
     }
+    if (res.status === 204) return undefined as T
     return res.json()
   }
 

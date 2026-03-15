@@ -241,6 +241,17 @@ class RunManager:
             self._start_run(next_run, next_fn)
             break
 
+        # Remove finished run from active registry — filesystem manifest is now
+        # the sole source of truth for completed/failed runs.
+        #
+        # @decision DEC-API-002 (amendment)
+        # Cancelled runs are intentionally kept in _runs because they have no
+        # on-disk manifest to fall back to. Only "completed" and "failed" runs
+        # have written a manifest.json before _on_run_finished is called.
+        run = self._runs.get(run_id)
+        if run and run.status in ("completed", "failed"):
+            del self._runs[run_id]
+
     async def _broadcast_status(
         self, run: ActiveRun, event_type: str, data: dict[str, Any]
     ) -> None:

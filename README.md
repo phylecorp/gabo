@@ -10,56 +10,62 @@ Given a question (and optionally evidence), SAT runs selected techniques sequent
 
 Techniques are grouped into three categories: **Diagnostic** (test hypotheses against evidence), **Contrarian** (challenge consensus thinking), and **Imaginative** (explore alternatives and futures). SAT includes optional adversarial multi-model critique where a challenger model reviews and rebuts each technique's output, and it can gather its own evidence via deep research before analysis begins. It works as a CLI tool, Python library, or MCP server for agent workflows.
 
-## Getting Started
+## Prerequisites
 
-### Quickstart:
-run: ```./desktop/dev.sh```
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Python | 3.11+ | [python.org/downloads](https://www.python.org/downloads/) |
+| Node.js | 20–24 | Required for desktop app only. Node 25+ is not supported ([why](#node-version)). Use [nvm](https://github.com/nvm-sh/nvm) for easy version management. |
+| API key | At least one | Anthropic, OpenAI, or Google Gemini — see [API Keys](#api-keys) |
 
-### 1. Create a virtual environment
+## Quickstart: Desktop App
 
-SAT requires Python 3.11+. Use a virtual environment to keep dependencies isolated:
+The desktop app provides a graphical interface for running analyses. The launch script handles Python environment setup, dependency installation, and starting both the API backend and Electron frontend.
 
 ```bash
+git clone https://github.com/phylecorp/gabo.git
+cd gabo
+cp .env.example .env        # add at least one API key
+./desktop/dev.sh             # installs deps, starts API + Electron
+```
+
+`dev.sh` will:
+- Check your Node version (and auto-switch via nvm if needed)
+- Create a Python virtual environment and install dependencies
+- Start the FastAPI backend on port 8742
+- Launch the Electron app
+
+> **Node version:** If you're on Node 25+, the script will attempt to switch to Node 22 via nvm. If nvm isn't available, it will tell you how to install the right version. See [.nvmrc](.nvmrc).
+
+## Quickstart: CLI
+
+SAT works as a standalone command-line tool — no Node.js or desktop app required.
+
+```bash
+git clone https://github.com/phylecorp/gabo.git
+cd gabo
 python3 -m venv venv
-source venv/bin/activate  # macOS/Linux
-# venv\Scripts\activate   # Windows
-```
-
-### 2. Install
-
-```bash
-pip install -e ".[all]"   # all LLM providers (recommended)
-```
-
-See [Installation](#installation) below for other variants.
-
-### 3. Configure API keys
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and add your API keys. At minimum, set one provider key (e.g., `ANTHROPIC_API_KEY`). SAT loads `.env` automatically on startup — no need to `export` anything.
-
-For cross-model adversarial critique (where a different LLM challenges each analysis), set keys for two or more providers. If only one key is configured, SAT falls back to self-critique using the same model.
-
-For deep research (`--research`), add a `PERPLEXITY_API_KEY` or `BRAVE_API_KEY`. Without these, research falls back to the primary LLM.
-
-### 4. Run your first analysis
-
-```bash
+source venv/bin/activate     # macOS/Linux
+pip install -e ".[all]"      # all LLM providers
+cp .env.example .env         # add at least one API key
 sat analyze "Will the ceasefire hold?"
 ```
 
 SAT will auto-select techniques, run adversarial critique, and write results to a `sat-<run-id>/` directory.
 
-### 5. Verify provider detection (optional)
+## API Keys
+
+Copy the example file and add your keys:
 
 ```bash
-sat analyze "Test question" --verbose 2>&1 | head -30
+cp .env.example .env
 ```
 
-Check the log output to confirm which providers are active for primary, challenger, and research roles.
+At minimum, set one provider key (e.g., `ANTHROPIC_API_KEY`). SAT loads `.env` automatically on startup.
+
+For **cross-model adversarial critique** (where a different LLM challenges each analysis), set keys for two or more providers. If only one key is configured, SAT falls back to self-critique using the same model.
+
+For **deep research** (`--research`), add a `PERPLEXITY_API_KEY` or `BRAVE_API_KEY`. Without these, research falls back to the primary LLM.
 
 ## Installation
 
@@ -308,9 +314,61 @@ In `multi` mode (default), SAT discovers all available research providers and ru
 
 ## Development
 
+### Setup
+
 ```bash
+git clone https://github.com/phylecorp/gabo.git
+cd gabo
 pip install -e ".[dev]"
-make test     # pytest
-make lint     # ruff check
-make format   # ruff format
 ```
+
+Or use the Makefile:
+
+```bash
+make install   # creates venv and installs all extras
+```
+
+### Running tests
+
+```bash
+make test      # pytest (unit tests)
+make lint      # ruff check
+make format    # ruff format
+```
+
+### Desktop development
+
+The desktop app uses Electron + React (via electron-vite). To work on the frontend:
+
+```bash
+./desktop/dev.sh    # starts API backend + Electron with hot reload
+```
+
+Frontend source is in `desktop/src/renderer/`. The FastAPI backend is in `src/sat/api/`.
+
+### Project structure
+
+```
+gabo/
+├── src/sat/                 # Python backend
+│   ├── techniques/          # 12 analytic techniques
+│   ├── adversarial/         # Multi-model critique
+│   ├── research/            # Evidence gathering
+│   ├── providers/           # LLM integrations (Anthropic, OpenAI, Gemini)
+│   ├── api/                 # FastAPI backend for desktop app
+│   ├── cli.py               # CLI entry point
+│   └── mcp_server.py        # MCP server
+├── desktop/                 # Electron + React frontend
+│   ├── src/main/            # Electron main process
+│   ├── src/renderer/        # React UI
+│   ├── dev.sh               # Development launch script
+│   └── package.json
+├── tests/                   # Test suite
+├── .env.example             # API key template
+├── pyproject.toml           # Python package config
+└── Makefile                 # Development shortcuts
+```
+
+## Node Version
+
+Node.js 25 changed npm's behavior: bin entries in `node_modules/.bin/` are copied instead of symlinked. This breaks `electron-vite`, which uses relative imports that resolve correctly via symlink but fail when copied. SAT pins to Node 20–24 via `.nvmrc` and `engines` in `package.json`. The `dev.sh` script checks automatically and will switch versions via nvm if available.

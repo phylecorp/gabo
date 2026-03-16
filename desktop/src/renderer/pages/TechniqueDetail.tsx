@@ -53,7 +53,7 @@ function ErrorState({ message, onRetry }: { message: string; onRetry?: () => voi
 function JsonFallback({ data }: { data: any }) {
   return (
     <IntelCard title="Raw JSON Output" accent="cyan">
-      <p className="text-muted text-xs" style={{ marginBottom: 8 }}>
+      <p className="text-muted text-xs technique-detail-description">
         No specialized renderer for this technique — showing raw output.
       </p>
       <pre className="ach-json-fallback">{JSON.stringify(data, null, 2)}</pre>
@@ -136,8 +136,7 @@ export default function TechniqueDetail() {
           />
           {artifact?.json_path && baseUrl && (
             <button
-              className="btn-secondary"
-              style={{ marginLeft: 'auto' }}
+              className="btn-secondary ml-auto"
               onClick={() => {
                 new SatClient(baseUrl).downloadArtifact(runId!, artifact.json_path!).then(blob => {
                   const url = URL.createObjectURL(blob)

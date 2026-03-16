@@ -10,6 +10,17 @@ provider is available, falling back to LLM research if none are. Transient failu
 (timeouts, rate limits, connection errors, and OpenAI server-side ResearchRequestFailed)
 trigger a single retry when all providers fail, preventing total pipeline failure from
 temporary issues.
+
+@decision DEC-RESEARCH-012
+@title Research provider API keys resolved from config file before env var
+@status accepted
+@rationale The Settings UI saves API keys to ~/.sat/config.json via ProviderConfig.
+Research providers previously only checked os.environ, so keys saved through the UI
+were silently ignored. discover_providers() now calls _load_config_file_key() for each
+research provider and passes the resolved key to the constructor. This matches the
+approach LLM providers already use via ProviderConfig.resolve_api_key(). The provider
+constructors' existing fallback (api_key or os.environ.get(...)) still handles env-var-only
+configurations, preserving backward compatibility.
 """
 
 from __future__ import annotations
@@ -17,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from sat.config import _load_config_file_key
 from sat.errors import is_transient_error
 from sat.events import (
     EventBus,
@@ -58,6 +70,14 @@ def discover_providers(
     Returns list of (name, provider) tuples for providers with valid API keys.
     Priority: deep research providers + brave (always attempted), then LLM fallback
     only when nothing else is available.
+
+    API key resolution order per provider:
+    1. ~/.sat/config.json (populated by Settings UI)
+    2. Environment variable (legacy / CLI workflow)
+
+    The provider constructors themselves implement the env-var fallback
+    (api_key or os.environ.get(...)), so passing None here is safe when no
+    config-file key is found — the constructor will try the env var itself.
     """
     providers: list[tuple[str, ResearchProvider]] = []
 
@@ -65,7 +85,9 @@ def discover_providers(
     try:
         from sat.research.openai_deep import OpenAIDeepResearchProvider
 
-        providers.append(("openai_deep", OpenAIDeepResearchProvider()))
+        providers.append(
+            ("openai_deep", OpenAIDeepResearchProvider(api_key=_load_config_file_key("openai")))
+        )
         logger.info("OpenAI deep research: available")
     except (ValueError, ImportError):
         logger.debug("OpenAI deep research: unavailable (no API key)")
@@ -73,7 +95,9 @@ def discover_providers(
     try:
         from sat.research.perplexity import PerplexityProvider
 
-        providers.append(("perplexity", PerplexityProvider()))
+        providers.append(
+            ("perplexity", PerplexityProvider(api_key=_load_config_file_key("perplexity")))
+        )
         logger.info("Perplexity deep research: available")
     except (ValueError, ImportError):
         logger.debug("Perplexity deep research: unavailable (no API key)")
@@ -81,7 +105,9 @@ def discover_providers(
     try:
         from sat.research.gemini_deep import GeminiDeepResearchProvider
 
-        providers.append(("gemini_deep", GeminiDeepResearchProvider()))
+        providers.append(
+            ("gemini_deep", GeminiDeepResearchProvider(api_key=_load_config_file_key("gemini")))
+        )
         logger.info("Gemini deep research: available")
     except (ValueError, ImportError):
         logger.debug("Gemini deep research: unavailable (no API key)")
@@ -90,7 +116,9 @@ def discover_providers(
     try:
         from sat.research.brave import BraveProvider
 
-        providers.append(("brave", BraveProvider()))
+        providers.append(
+            ("brave", BraveProvider(api_key=_load_config_file_key("brave")))
+        )
         logger.info("Brave search: available")
     except (ValueError, ImportError):
         logger.debug("Brave search: unavailable (no API key)")

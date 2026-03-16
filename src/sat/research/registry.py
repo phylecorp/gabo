@@ -6,6 +6,15 @@
 @rationale Perplexity provides the best research quality (multi-step with citations).
 Brave is a good fallback for targeted queries. LLM fallback always works but uses
 training data only. Auto-selection checks env vars to find the best available backend.
+
+@decision DEC-RESEARCH-011
+@title Registry passes model override to provider constructors
+@status accepted
+@rationale create_research_provider now accepts an optional model parameter that
+is forwarded to the underlying provider constructor. When model=None, the
+providers resolve their own default via resolve_research_model(). This keeps
+resolution logic in the providers (single source of truth) while still allowing
+callers to force a specific model without constructing providers directly.
 """
 
 from __future__ import annotations
@@ -23,6 +32,7 @@ def create_research_provider(
     provider_name: str = "auto",
     api_key: str | None = None,
     llm_provider: LLMProvider | None = None,
+    model: str | None = None,
 ) -> ResearchProvider:
     """Create a research provider, auto-selecting if not specified.
 
@@ -30,21 +40,24 @@ def create_research_provider(
         provider_name: "perplexity", "brave", "llm", "openai_deep", "gemini_deep", or "auto"
         api_key: API key for the research provider
         llm_provider: LLM provider for fallback research
+        model: Override the model used by the provider. When None, each provider
+            resolves its own default via resolve_research_model() using the
+            config file, environment variables, and built-in defaults.
     """
     if provider_name == "openai_deep":
         from sat.research.openai_deep import OpenAIDeepResearchProvider
 
-        return OpenAIDeepResearchProvider(api_key=api_key)
+        return OpenAIDeepResearchProvider(api_key=api_key, model=model)
 
     if provider_name == "gemini_deep":
         from sat.research.gemini_deep import GeminiDeepResearchProvider
 
-        return GeminiDeepResearchProvider(api_key=api_key)
+        return GeminiDeepResearchProvider(api_key=api_key, model=model)
 
     if provider_name == "perplexity":
         from sat.research.perplexity import PerplexityProvider
 
-        return PerplexityProvider(api_key=api_key)
+        return PerplexityProvider(api_key=api_key, model=model)
 
     if provider_name == "brave":
         from sat.research.brave import BraveProvider
@@ -63,7 +76,7 @@ def create_research_provider(
             logger.info("Auto-selected Perplexity research provider")
             from sat.research.perplexity import PerplexityProvider
 
-            return PerplexityProvider(api_key=api_key)
+            return PerplexityProvider(api_key=api_key, model=model)
 
         if os.environ.get("BRAVE_API_KEY"):
             logger.info("Auto-selected Brave research provider")

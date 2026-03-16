@@ -58,9 +58,10 @@ class TestTryResolveApiKey:
 
     def test_returns_key_from_openai_env(self):
         """Resolve OPENAI_API_KEY from environment."""
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "openai-key"}):
-            config = ProviderConfig(provider="openai", model="gpt-4")
-            assert config.try_resolve_api_key() == "openai-key"
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict("os.environ", {"OPENAI_API_KEY": "openai-key"}):
+                config = ProviderConfig(provider="openai", model="gpt-4")
+                assert config.try_resolve_api_key() == "openai-key"
 
     def test_returns_key_from_gemini_env(self):
         """Resolve GEMINI_API_KEY from environment."""
@@ -70,16 +71,18 @@ class TestTryResolveApiKey:
 
     def test_returns_none_when_no_key_found(self):
         """Return None instead of raising when no key is available."""
-        with patch.dict("os.environ", {}, clear=True):
-            config = ProviderConfig(provider="anthropic")
-            assert config.try_resolve_api_key() is None
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict("os.environ", {}, clear=True):
+                config = ProviderConfig(provider="anthropic")
+                assert config.try_resolve_api_key() is None
 
     def test_returns_none_for_unknown_provider(self):
         """Return None for providers without env var mapping."""
-        with patch.dict("os.environ", {}, clear=True):
-            config = ProviderConfig(provider="custom-provider", model="custom-model")
-            # Falls back to CUSTOM-PROVIDER_API_KEY which doesn't exist
-            assert config.try_resolve_api_key() is None
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict("os.environ", {}, clear=True):
+                config = ProviderConfig(provider="custom-provider", model="custom-model")
+                # Falls back to CUSTOM-PROVIDER_API_KEY which doesn't exist
+                assert config.try_resolve_api_key() is None
 
     def test_prefers_config_over_env(self):
         """Config api_key takes precedence over environment variable."""

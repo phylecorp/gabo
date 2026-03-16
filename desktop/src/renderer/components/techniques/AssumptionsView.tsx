@@ -1,3 +1,14 @@
+/**
+ * @decision DEC-DESKTOP-ASSUMPTIONS-001
+ * @title AssumptionsView: renders KeyAssumptionsResult with correct field names and full metadata
+ * @status accepted
+ * @rationale The model field is `what_undermines` (not `what_would_undermine`). The renderer
+ *   now accesses this correctly. analytic_line provides context for the entire analysis.
+ *   basis_for_confidence explains why each assumption is believed. most_vulnerable is the
+ *   LLM's explicit vulnerability ranking shown directly (not recomputed from confidence levels).
+ *   recommended_monitoring surfaces actionable tracking items. The table displays all 5
+ *   per-assumption fields.
+ */
 import IntelCard from '../common/IntelCard'
 import IntelBadge from '../common/IntelBadge'
 import CollapsibleSection from '../common/CollapsibleSection'
@@ -6,15 +17,10 @@ import type { TechniqueRendererProps } from './rendererRegistry'
 
 interface Assumption {
   assumption?: string
-  statement?: string
-  description?: string
   confidence?: string
-  confidence_level?: string
-  what_would_undermine?: string
-  undermined_by?: string
+  basis_for_confidence?: string
+  what_undermines?: string
   impact_if_wrong?: string
-  vulnerability?: string
-  vulnerable?: boolean
   [key: string]: any
 }
 
@@ -25,15 +31,11 @@ function ConfidenceBadge({ level }: { level?: string }) {
   return <IntelBadge label={level} variant="confidence" level={badgeLevel} />
 }
 
-function isVulnerable(a: Assumption): boolean {
-  if (a.vulnerable === true) return true
-  const conf = (a.confidence || a.confidence_level || '').toLowerCase()
-  return conf === 'low'
-}
-
 export default function AssumptionsView({ data }: TechniqueRendererProps) {
-  const assumptions: Assumption[] = data?.assumptions || data?.key_assumptions || []
-  const vulnerable = assumptions.filter(isVulnerable)
+  const analyticLine: string = data?.analytic_line || ''
+  const assumptions: Assumption[] = data?.assumptions || []
+  const mostVulnerable: string[] = data?.most_vulnerable || []
+  const recommendedMonitoring: string[] = data?.recommended_monitoring || []
 
   if (assumptions.length === 0) {
     return (
@@ -51,26 +53,20 @@ export default function AssumptionsView({ data }: TechniqueRendererProps) {
         </IntelCard>
       )}
 
-      {vulnerable.length > 0 && (
+      {/* The analytic judgment being examined */}
+      {analyticLine && (
+        <IntelCard title="Analytic Line" accent="amber">
+          <p className="text-secondary" style={{ margin: 0, fontStyle: 'italic' }}>{analyticLine}</p>
+        </IntelCard>
+      )}
+
+      {/* LLM's explicit vulnerability ranking */}
+      {mostVulnerable.length > 0 && (
         <IntelCard title="Most Vulnerable Assumptions" accent="red">
           <ul className="technique-list">
-            {vulnerable.map((a, i) => (
+            {mostVulnerable.map((vuln, i) => (
               <li key={i} className="assumption-item assumption-item-vulnerable">
-                <p className="assumption-statement">
-                  {a.assumption || a.statement || a.description}
-                </p>
-                {(a.what_would_undermine || a.undermined_by) && (
-                  <p className="assumption-undermine text-sm">
-                    <span className="assumption-field-label">Undermined by: </span>
-                    {a.what_would_undermine || a.undermined_by}
-                  </p>
-                )}
-                {(a.impact_if_wrong || a.vulnerability) && (
-                  <p className="assumption-impact text-sm">
-                    <span className="assumption-field-label">Impact if wrong: </span>
-                    {a.impact_if_wrong || a.vulnerability}
-                  </p>
-                )}
+                <p className="assumption-statement" style={{ margin: 0 }}>{vuln}</p>
               </li>
             ))}
           </ul>
@@ -84,26 +80,28 @@ export default function AssumptionsView({ data }: TechniqueRendererProps) {
               <tr>
                 <th>Assumption</th>
                 <th>Confidence</th>
-                <th>What Would Undermine</th>
+                <th>Basis for Confidence</th>
+                <th>What Undermines</th>
                 <th>Impact If Wrong</th>
               </tr>
             </thead>
             <tbody>
               {assumptions.map((a, i) => (
-                <tr key={i} className={isVulnerable(a) ? 'assumption-row-vulnerable' : ''}>
+                <tr key={i}>
                   <td className="assumption-td-main">
-                    {a.assumption || a.statement || a.description || '—'}
+                    {a.assumption || '—'}
                   </td>
                   <td>
-                    <ConfidenceBadge
-                      level={a.confidence || a.confidence_level}
-                    />
+                    <ConfidenceBadge level={a.confidence} />
                   </td>
                   <td className="text-secondary text-sm">
-                    {a.what_would_undermine || a.undermined_by || '—'}
+                    {a.basis_for_confidence || '—'}
                   </td>
                   <td className="text-secondary text-sm">
-                    {a.impact_if_wrong || a.vulnerability || '—'}
+                    {a.what_undermines || '—'}
+                  </td>
+                  <td className="text-secondary text-sm">
+                    {a.impact_if_wrong || '—'}
                   </td>
                 </tr>
               ))}
@@ -112,19 +110,15 @@ export default function AssumptionsView({ data }: TechniqueRendererProps) {
         </div>
       </IntelCard>
 
-      {data?.critical_assumptions && (
-        <CollapsibleSection title="Critical Assumptions" defaultOpen={true}>
-          {Array.isArray(data.critical_assumptions)
-            ? (
-              <ul className="technique-list">
-                {data.critical_assumptions.map((item: string, i: number) => (
-                  <li key={i} className="technique-list-item text-secondary">{item}</li>
-                ))}
-              </ul>
-            )
-            : <p className="text-secondary text-sm">{data.critical_assumptions}</p>
-          }
-        </CollapsibleSection>
+      {/* Actionable monitoring items */}
+      {recommendedMonitoring.length > 0 && (
+        <IntelCard title="Recommended Monitoring" accent="cyan">
+          <ul className="technique-list">
+            {recommendedMonitoring.map((item, i) => (
+              <li key={i} className="technique-list-item text-secondary">{item}</li>
+            ))}
+          </ul>
+        </IntelCard>
       )}
     </div>
   )

@@ -20,6 +20,16 @@ file before falling back to environment variables so pipeline runs pick up
 UI-saved keys without requiring a process restart or env var export.
 The config file is loaded on each resolve_api_key call (not cached) to pick
 up changes made during a running session.
+
+@decision DEC-CFG-004
+@title DEFAULT_RESEARCH_MODELS and resolve_research_model for research-specific model selection
+@status accepted
+@rationale Research providers (perplexity, openai, gemini) use distinct models optimised
+for deep-research tasks (e.g. o3-deep-research-2025-06-26, sonar-deep-research). Keeping
+these separate from DEFAULT_MODELS avoids conflating analysis-model defaults with
+research-model defaults. resolve_research_model() follows the same three-tier chain as
+resolve_model(): config.json research_model field > env var > built-in default.
+The env var convention is <PROVIDER_UPPER>_RESEARCH_MODEL (e.g. OPENAI_RESEARCH_MODEL).
 """
 
 from __future__ import annotations
@@ -40,6 +50,57 @@ DEFAULT_MODELS = {
     "copilot": "copilot-gpt-4",
 }
 
+# Curated model lists for providers without a model listing API.
+# These are used both as the primary list (Anthropic, Perplexity) and as
+# fallback when the API listing fails (OpenAI, Gemini).
+#
+# @decision DEC-MODELS-001 (see MASTER_PLAN.md)
+# Hybrid model listing: API-fetched for OpenAI/Gemini, curated for Anthropic/Perplexity.
+# Curated lists also serve as fallback when API calls fail.
+ANTHROPIC_ANALYSIS_MODELS = [
+    {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "default": True},
+    {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6"},
+    {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5"},
+]
+ANTHROPIC_RESEARCH_MODELS: list[dict] = []
+
+PERPLEXITY_RESEARCH_MODELS = [
+    {"id": "sonar-deep-research", "name": "Sonar Deep Research", "default": True},
+    {"id": "sonar-pro", "name": "Sonar Pro"},
+    {"id": "sonar", "name": "Sonar"},
+    {"id": "sonar-reasoning-pro", "name": "Sonar Reasoning Pro"},
+    {"id": "sonar-reasoning", "name": "Sonar Reasoning"},
+]
+PERPLEXITY_ANALYSIS_MODELS: list[dict] = []
+
+# Fallback lists for OpenAI and Gemini when API listing fails
+OPENAI_ANALYSIS_MODELS_FALLBACK = [
+    {"id": "o3", "name": "O3", "default": True},
+    {"id": "gpt-4o", "name": "GPT-4o"},
+    {"id": "gpt-4.1", "name": "GPT-4.1"},
+    {"id": "o4-mini", "name": "O4 Mini"},
+]
+OPENAI_RESEARCH_MODELS_FALLBACK = [
+    {"id": "o3-deep-research-2025-06-26", "name": "O3 Deep Research", "default": True},
+    {"id": "o4-mini-deep-research-2025-06-26", "name": "O4 Mini Deep Research"},
+]
+
+GEMINI_ANALYSIS_MODELS_FALLBACK = [
+    {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "default": True},
+    {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash"},
+    {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro"},
+]
+GEMINI_RESEARCH_MODELS_FALLBACK: list[dict] = []
+
+# Simple string defaults for research model resolution (used by resolve_research_model()).
+# Note: PERPLEXITY_RESEARCH_MODELS above provides the curated list for the UI;
+# DEFAULT_RESEARCH_MODELS is the string fallback for the three-tier resolve chain.
+DEFAULT_RESEARCH_MODELS = {
+    "perplexity": "sonar-deep-research",
+    "openai": "o3-deep-research-2025-06-26",
+    "gemini": "deep-research-pro-preview-12-2025",
+}
+
 CHALLENGER_PREFERENCE = {
     "anthropic": ["openai", "gemini"],
     "openai": ["anthropic", "gemini"],
@@ -51,6 +112,8 @@ PROVIDER_API_KEY_ENVS = {
     "openai": "OPENAI_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "copilot": None,
+    "perplexity": "PERPLEXITY_API_KEY",
+    "brave": "BRAVE_API_KEY",
 }
 
 
@@ -86,6 +149,48 @@ def _load_config_file_model(provider: str) -> str | None:
         return model if model else None
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def _load_config_file_research_model(provider: str) -> str | None:
+    """Read the research_model for *provider* from ~/.sat/config.json, if present.
+
+    Returns None if the config file doesn't exist, the provider is not present,
+    or the research_model field is absent or empty.
+    """
+    config_path = _get_sat_config_path()
+    if not config_path.exists():
+        return None
+    try:
+        data = json.loads(config_path.read_text())
+        model = data.get("providers", {}).get(provider, {}).get("research_model", "")
+        return model if model else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def resolve_research_model(provider: str) -> str:
+    """Resolve the research model for *provider* using a three-tier fallback chain.
+
+    Priority order:
+    1. research_model field in ~/.sat/config.json for the provider
+    2. <PROVIDER_UPPER>_RESEARCH_MODEL environment variable
+    3. DEFAULT_RESEARCH_MODELS built-in default for the provider
+
+    Returns an empty string for unknown providers not in DEFAULT_RESEARCH_MODELS.
+    """
+    # Tier 1: config file
+    file_model = _load_config_file_research_model(provider)
+    if file_model:
+        return file_model
+
+    # Tier 2: environment variable
+    env_var = f"{provider.upper()}_RESEARCH_MODEL"
+    env_model = os.environ.get(env_var, "")
+    if env_model:
+        return env_model
+
+    # Tier 3: built-in default (empty string for unknown providers)
+    return DEFAULT_RESEARCH_MODELS.get(provider, "")
 
 
 def resolve_challenger_provider(primary_provider: str) -> tuple[str, str] | None:
@@ -307,5 +412,18 @@ __all__ = [
     "VerificationConfig",
     "IngestionConfig",
     "DecompositionConfig",
+    # Research model resolution (DEC-CFG-004)
+    "DEFAULT_RESEARCH_MODELS",
+    "resolve_research_model",
     "_get_sat_config_path",
+    "_load_config_file_research_model",
+    # Curated model lists (DEC-MODELS-001)
+    "ANTHROPIC_ANALYSIS_MODELS",
+    "ANTHROPIC_RESEARCH_MODELS",
+    "PERPLEXITY_ANALYSIS_MODELS",
+    "PERPLEXITY_RESEARCH_MODELS",
+    "OPENAI_ANALYSIS_MODELS_FALLBACK",
+    "OPENAI_RESEARCH_MODELS_FALLBACK",
+    "GEMINI_ANALYSIS_MODELS_FALLBACK",
+    "GEMINI_RESEARCH_MODELS_FALLBACK",
 ]

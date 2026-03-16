@@ -9,6 +9,15 @@ with o4-mini fallback on 404. Returns ResearchResponse with report and citations
 ResearchRequestFailed (a RuntimeError subclass) is raised when OpenAI returns
 status='failed', enabling multi_runner.py to classify the error as transient
 and retry the request, since server-side failures are intermittent.
+
+@decision DEC-RESEARCH-011
+@title Model resolution via resolve_research_model() for config-driven overrides
+@status accepted
+@rationale The primary model now resolves via resolve_research_model("openai")
+rather than a module-level env var constant. This lets users configure the deep
+research model in ~/.sat/config.json or via OPENAI_RESEARCH_MODEL without
+restarting. Explicit constructor param wins; FALLBACK_MODEL (for 404 auto-
+downgrade) remains a module-level constant since it's not user-configurable.
 """
 
 from __future__ import annotations
@@ -19,6 +28,7 @@ import os
 
 import httpx
 
+from sat.config import resolve_research_model
 from sat.research.base import ResearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -34,7 +44,7 @@ class ResearchRequestFailed(RuntimeError):
 
 
 # Constants
-PRIMARY_MODEL = os.environ.get("OPENAI_MODEL", "o3-deep-research-2025-06-26")
+# FALLBACK_MODEL is used for automatic 404 downgrade — not config-driven.
 FALLBACK_MODEL = os.environ.get("OPENAI_DEEP_RESEARCH_FALLBACK", "o4-mini-deep-research-2025-06-26")
 POLL_INTERVAL = 10  # seconds
 MAX_POLL_ATTEMPTS = 120  # 20 minutes max
@@ -43,12 +53,18 @@ MAX_POLL_ATTEMPTS = 120  # 20 minutes max
 class OpenAIDeepResearchProvider:
     """Research provider using OpenAI's deep research models."""
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+    ) -> None:
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise ValueError("No OpenAI API key. Set OPENAI_API_KEY or pass api_key.")
         self._api_key = key
         self._base_url = "https://api.openai.com/v1"
+        # Resolution: explicit param > config file > OPENAI_RESEARCH_MODEL env var > default
+        self._primary_model = model or resolve_research_model("openai")
 
     async def research(
         self,
@@ -64,11 +80,11 @@ class OpenAIDeepResearchProvider:
         # Try primary model first, fallback to o4-mini on 404
         response_id = None
         try:
-            response_id = await self._submit_request(topic, PRIMARY_MODEL)
-            logger.info(f"Submitted deep research request {response_id} with {PRIMARY_MODEL}")
+            response_id = await self._submit_request(topic, self._primary_model)
+            logger.info(f"Submitted deep research request {response_id} with {self._primary_model}")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                logger.warning(f"{PRIMARY_MODEL} not available, falling back to {FALLBACK_MODEL}")
+                logger.warning(f"{self._primary_model} not available, falling back to {FALLBACK_MODEL}")
                 response_id = await self._submit_request(topic, FALLBACK_MODEL)
                 logger.info(f"Submitted deep research request {response_id} with {FALLBACK_MODEL}")
             else:

@@ -6,6 +6,15 @@
 @rationale Uses the v1beta Interactions API with deep-research-pro agent.
 Background mode with polling every 15s. Extracts citations via fallback chain
 (sources > groundingMetadata > regex). Returns ResearchResponse.
+
+@decision DEC-RESEARCH-011
+@title Model resolution via resolve_research_model() for config-driven overrides
+@status accepted
+@rationale The agent name now resolves via resolve_research_model("gemini")
+rather than the module-level GEMINI_DEEP_AGENT env var. This lets users
+configure the deep research agent in ~/.sat/config.json or via
+GEMINI_RESEARCH_MODEL without restarting. Explicit constructor param wins.
+The module-level AGENT constant is removed; _submit_request uses self._agent.
 """
 
 from __future__ import annotations
@@ -17,12 +26,12 @@ import re
 
 import httpx
 
+from sat.config import resolve_research_model
 from sat.research.base import ResearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
 
 # Constants
-AGENT = os.environ.get("GEMINI_DEEP_AGENT", "deep-research-pro-preview-12-2025")
 POLL_INTERVAL = 15  # seconds
 MAX_POLL_ATTEMPTS = 80  # 20 minutes max
 
@@ -30,12 +39,18 @@ MAX_POLL_ATTEMPTS = 80  # 20 minutes max
 class GeminiDeepResearchProvider:
     """Research provider using Gemini's deep research agent."""
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+    ) -> None:
         key = api_key or os.environ.get("GEMINI_API_KEY")
         if not key:
             raise ValueError("No Gemini API key. Set GEMINI_API_KEY or pass api_key.")
         self._api_key = key
         self._base_url = "https://generativelanguage.googleapis.com/v1beta"
+        # Resolution: explicit param > config file > GEMINI_RESEARCH_MODEL env var > default
+        self._agent = model or resolve_research_model("gemini")
 
     async def research(
         self,
@@ -72,7 +87,7 @@ class GeminiDeepResearchProvider:
                 },
                 json={
                     "input": topic,
-                    "agent": AGENT,
+                    "agent": self._agent,
                     "background": True,
                     "store": True,
                 },

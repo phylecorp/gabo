@@ -58,6 +58,9 @@ def clean_env():
         "OPENAI_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
+        # Research providers — must also be cleaned since they are now in _KNOWN_PROVIDERS
+        "BRAVE_API_KEY",
+        "PERPLEXITY_API_KEY",
     ]
     saved = {k: os.environ.pop(k, None) for k in keys_to_clean}
     yield
@@ -139,7 +142,8 @@ def test_get_settings_returns_200(client, tmp_path):
         config_mod._get_config_path = orig
 
 
-def test_get_settings_has_all_three_providers(client, tmp_path):
+def test_get_settings_has_all_known_providers(client, tmp_path):
+    # Three LLM providers plus two research providers (brave, perplexity).
     import sat.api.routes.config as config_mod
     config_path = tmp_path / "nonexistent.json"
     orig = config_mod._get_config_path
@@ -147,7 +151,9 @@ def test_get_settings_has_all_three_providers(client, tmp_path):
     try:
         resp = client.get("/api/config/settings")
         body = resp.json()
-        assert set(body["providers"].keys()) == {"anthropic", "openai", "gemini"}
+        assert set(body["providers"].keys()) == {
+            "anthropic", "openai", "gemini", "perplexity", "brave"
+        }
     finally:
         config_mod._get_config_path = orig
 
@@ -473,6 +479,71 @@ def test_list_providers_detects_config_file_key(client, tmp_path):
         assert resp.status_code == 200
         providers = {p["name"]: p for p in resp.json()}
         assert providers["gemini"]["has_api_key"] is True
+    finally:
+        config_mod._get_config_path = orig
+
+
+def test_list_providers_returns_saved_default_model(client, tmp_path):
+    """GET /api/config/providers returns the user-saved default_model from config.json.
+
+    This is the core bug: previously list_providers always returned DEFAULT_MODELS
+    (hardcoded), ignoring the model the user saved in Settings. The fix reads
+    default_model from config file when present, falling back to DEFAULT_MODELS.
+    """
+    import sat.api.routes.config as config_mod
+    config_path = write_config(tmp_path, {
+        "providers": {
+            "openai": {"api_key": "sk-openai-savedkey12345", "default_model": "gpt-4-turbo"},
+        }
+    })
+    orig = config_mod._get_config_path
+    config_mod._get_config_path = lambda: config_path
+    try:
+        resp = client.get("/api/config/providers")
+        assert resp.status_code == 200
+        providers = {p["name"]: p for p in resp.json()}
+        # The user saved "gpt-4-turbo" — that should be returned, not the hardcoded default
+        assert providers["openai"]["default_model"] == "gpt-4-turbo"
+    finally:
+        config_mod._get_config_path = orig
+
+
+def test_list_providers_falls_back_to_default_model_when_no_config(client, tmp_path):
+    """GET /api/config/providers falls back to DEFAULT_MODELS when config has no model."""
+    import sat.api.routes.config as config_mod
+    from sat.config import DEFAULT_MODELS
+    config_path = tmp_path / "nonexistent.json"
+    orig = config_mod._get_config_path
+    config_mod._get_config_path = lambda: config_path
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-fallbacktest1234"
+    try:
+        resp = client.get("/api/config/providers")
+        assert resp.status_code == 200
+        providers = {p["name"]: p for p in resp.json()}
+        # No saved model: should fall back to DEFAULT_MODELS
+        assert providers["anthropic"]["default_model"] == DEFAULT_MODELS.get("anthropic", "")
+    finally:
+        config_mod._get_config_path = orig
+        del os.environ["ANTHROPIC_API_KEY"]
+
+
+def test_list_providers_empty_saved_model_falls_back_to_default(client, tmp_path):
+    """If config.json has empty default_model, fall back to DEFAULT_MODELS."""
+    import sat.api.routes.config as config_mod
+    from sat.config import DEFAULT_MODELS
+    config_path = write_config(tmp_path, {
+        "providers": {
+            "anthropic": {"api_key": "sk-ant-testkey1234567", "default_model": ""}
+        }
+    })
+    orig = config_mod._get_config_path
+    config_mod._get_config_path = lambda: config_path
+    try:
+        resp = client.get("/api/config/providers")
+        assert resp.status_code == 200
+        providers = {p["name"]: p for p in resp.json()}
+        # Empty saved model: fall back to DEFAULT_MODELS
+        assert providers["anthropic"]["default_model"] == DEFAULT_MODELS.get("anthropic", "")
     finally:
         config_mod._get_config_path = orig
 

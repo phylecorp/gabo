@@ -25,7 +25,7 @@ async function createWindow() {
     backgroundColor: '#0a0a0f',
     icon: join(__dirname, '../../build/icon.png'),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false
@@ -61,7 +61,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('dialog:open-files', async () => {
-    const result = await dialog.showOpenDialog({
+    const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openFile', 'multiSelections'],
       filters: [
         { name: 'Documents', extensions: ['pdf', 'docx', 'pptx', 'xlsx', 'html', 'htm', 'txt', 'md', 'csv', 'json'] },

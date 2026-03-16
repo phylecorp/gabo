@@ -521,7 +521,7 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
             )
             synthesis_result = await run_synthesis(synthesis_ctx, provider)
             artifact = writer.write_result(synthesis_result)
-            synthesis_path = artifact.markdown_path
+            synthesis_path = artifact.json_path
         except Exception:
             logger.exception("Synthesis failed")
             synthesis_path = None

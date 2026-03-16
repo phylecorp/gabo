@@ -1,13 +1,13 @@
 /**
  * @decision DEC-DESKTOP-ALT-FUTURES-001
- * @title AltFuturesView: interactive 2x2 scenario matrix with expandable quadrants
+ * @title AltFuturesView: interactive 2x2 scenario matrix with axis objects and proper field mapping
  * @status accepted
- * @rationale Alternative Futures uses two orthogonal driving forces to generate four
- *   distinct future scenarios. The 2x2 quadrant layout is the canonical format —
- *   it maps the analytical logic directly to spatial position. Each quadrant gets a
- *   distinct signal color for immediate differentiation. Click-to-expand reveals the
- *   full scenario description without cluttering the overview. The axis labels are
- *   derived from the driving forces extracted from the data.
+ * @rationale Alternative Futures uses two orthogonal driving forces to generate four distinct
+ *   future scenarios. The x_axis and y_axis fields are FuturesAxis objects with name/low_label/
+ *   high_label — not plain strings. Scenarios use scenario_name (not name/title) and narrative
+ *   (not description/summary). indicators is a list[str] — the old typeof check that filtered
+ *   arrays is removed. focal_issue, key_uncertainties, and cross_cutting_indicators are new
+ *   top-level fields. strategic_implications replaces the old implications field name.
  */
 import { useState } from 'react'
 import IntelCard from '../common/IntelCard'
@@ -20,45 +20,36 @@ type QuadrantAccent = 'cyan' | 'green' | 'amber' | 'purple'
 const QUADRANT_ACCENTS: QuadrantAccent[] = ['cyan', 'green', 'amber', 'purple']
 const QUADRANT_LABELS = ['I', 'II', 'III', 'IV']
 
-interface Scenario {
+interface FuturesAxis {
   name?: string
-  title?: string
-  description?: string
-  summary?: string
+  low_label?: string
+  high_label?: string
+}
+
+interface ScenarioQuadrant {
+  quadrant_label?: string
+  scenario_name?: string
+  narrative?: string
+  indicators?: string[]
+  policy_implications?: string
   [key: string]: any
-}
-
-function extractScenarios(data: any): Scenario[] {
-  // API may return scenarios under various keys
-  if (Array.isArray(data.scenarios)) return data.scenarios
-  if (Array.isArray(data.quadrants)) return data.quadrants
-  if (Array.isArray(data.futures)) return data.futures
-  // Fallback: look for any array of objects with name/title/description
-  for (const key of Object.keys(data)) {
-    const val = data[key]
-    if (Array.isArray(val) && val.length >= 2 && val[0]?.name) return val
-  }
-  return []
-}
-
-function extractDrivingForces(data: any): { x: string; y: string } {
-  return {
-    x: data.driving_force_x || data.x_axis || data.force_x || 'Driving Force X',
-    y: data.driving_force_y || data.y_axis || data.force_y || 'Driving Force Y',
-  }
 }
 
 export default function AltFuturesView({ data }: TechniqueRendererProps) {
   const [expandedQuadrant, setExpandedQuadrant] = useState<number | null>(null)
-  const scenarios = extractScenarios(data)
-  const forces = extractDrivingForces(data)
+
+  const scenarios: ScenarioQuadrant[] = data?.scenarios || []
+  const xAxis: FuturesAxis | null = data?.x_axis || null
+  const yAxis: FuturesAxis | null = data?.y_axis || null
+  const focalIssue: string = data?.focal_issue || ''
+  const keyUncertainties: string[] = data?.key_uncertainties || []
+  const crossCuttingIndicators: string[] = data?.cross_cutting_indicators || []
+  const strategicImplications: string = data?.strategic_implications || ''
 
   if (scenarios.length === 0) {
-    // Generic fallback
     return (
       <IntelCard title="Alternative Futures" accent="purple">
         <p className="text-secondary text-sm">{data?.summary || 'No scenario data available.'}</p>
-        <pre className="ach-json-fallback">{JSON.stringify(data, null, 2)}</pre>
       </IntelCard>
     )
   }
@@ -66,31 +57,64 @@ export default function AltFuturesView({ data }: TechniqueRendererProps) {
   return (
     <div className="alt-futures-container">
       {/* Summary */}
-      {data.summary && (
+      {data?.summary && (
         <IntelCard accent="purple" className="alt-futures-summary">
           <p className="text-secondary" style={{ margin: 0 }}>{data.summary}</p>
         </IntelCard>
       )}
 
+      {/* Focal Issue */}
+      {focalIssue && (
+        <IntelCard title="Focal Issue" accent="purple">
+          <p className="text-secondary" style={{ margin: 0 }}>{focalIssue}</p>
+        </IntelCard>
+      )}
+
+      {/* Key Uncertainties */}
+      {keyUncertainties.length > 0 && (
+        <IntelCard title="Key Uncertainties" accent="purple">
+          <ul className="technique-list">
+            {keyUncertainties.map((u, i) => (
+              <li key={i} className="technique-list-item text-secondary">{u}</li>
+            ))}
+          </ul>
+        </IntelCard>
+      )}
+
       {/* Axis labels */}
-      <div className="alt-futures-axes">
-        <div className="alt-futures-axis-x">
-          <span className="alt-futures-axis-label">{forces.x}</span>
-          <span className="alt-futures-axis-arrow">→</span>
+      {(xAxis || yAxis) && (
+        <div className="alt-futures-axes">
+          {xAxis && (
+            <div className="alt-futures-axis-x">
+              <span className="alt-futures-axis-label">{xAxis.name}</span>
+              {xAxis.low_label && xAxis.high_label && (
+                <span className="alt-futures-axis-range text-muted text-xs">
+                  {xAxis.low_label} → {xAxis.high_label}
+                </span>
+              )}
+              <span className="alt-futures-axis-arrow">→</span>
+            </div>
+          )}
+          {yAxis && (
+            <div className="alt-futures-axis-y">
+              <span className="alt-futures-axis-arrow">↑</span>
+              <span className="alt-futures-axis-label">{yAxis.name}</span>
+              {yAxis.low_label && yAxis.high_label && (
+                <span className="alt-futures-axis-range text-muted text-xs">
+                  {yAxis.low_label} → {yAxis.high_label}
+                </span>
+              )}
+            </div>
+          )}
         </div>
-        <div className="alt-futures-axis-y">
-          <span className="alt-futures-axis-arrow">↑</span>
-          <span className="alt-futures-axis-label">{forces.y}</span>
-        </div>
-      </div>
+      )}
 
       {/* 2x2 grid */}
       <div className="alt-futures-grid">
         {scenarios.slice(0, 4).map((scenario, i) => {
           const accent = QUADRANT_ACCENTS[i % 4]
           const isExpanded = expandedQuadrant === i
-          const title = scenario.name || scenario.title || `Scenario ${QUADRANT_LABELS[i]}`
-          const desc = scenario.description || scenario.summary || ''
+          const title = scenario.scenario_name || `Scenario ${QUADRANT_LABELS[i]}`
 
           return (
             <div
@@ -102,23 +126,35 @@ export default function AltFuturesView({ data }: TechniqueRendererProps) {
                 <span className={`alt-futures-quadrant-id alt-futures-id-${accent}`}>
                   {QUADRANT_LABELS[i]}
                 </span>
-                <span className="alt-futures-quadrant-name">{title}</span>
+                <div style={{ flex: 1 }}>
+                  <span className="alt-futures-quadrant-name">{title}</span>
+                  {scenario.quadrant_label && (
+                    <p className="text-muted text-xs" style={{ margin: 0 }}>{scenario.quadrant_label}</p>
+                  )}
+                </div>
                 <span className="alt-futures-expand-hint">{isExpanded ? '▾' : '▸'}</span>
               </div>
               {isExpanded && (
                 <div className="alt-futures-quadrant-body">
-                  <p className="text-secondary text-sm">{desc}</p>
-                  {/* Render any additional scenario fields */}
-                  {Object.entries(scenario)
-                    .filter(([k]) => !['name', 'title', 'description', 'summary'].includes(k))
-                    .map(([k, v]) => (
-                      typeof v === 'string' ? (
-                        <div key={k} className="alt-futures-extra-field">
-                          <span className="alt-futures-field-key">{k.replace(/_/g, ' ')}</span>
-                          <span className="text-secondary text-sm">{v}</span>
-                        </div>
-                      ) : null
-                    ))}
+                  {scenario.narrative && (
+                    <p className="text-secondary text-sm" style={{ marginBottom: 8 }}>{scenario.narrative}</p>
+                  )}
+                  {scenario.indicators && scenario.indicators.length > 0 && (
+                    <div className="alt-futures-extra-field">
+                      <span className="alt-futures-field-key">Indicators</span>
+                      <ul className="technique-list">
+                        {scenario.indicators.map((ind: string, j: number) => (
+                          <li key={j} className="technique-list-item technique-list-item-warning text-secondary text-sm">{ind}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {scenario.policy_implications && (
+                    <div className="alt-futures-extra-field">
+                      <span className="alt-futures-field-key">Policy Implications</span>
+                      <span className="text-secondary text-sm">{scenario.policy_implications}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -126,35 +162,21 @@ export default function AltFuturesView({ data }: TechniqueRendererProps) {
         })}
       </div>
 
-      {/* Implications */}
-      {data.implications && (
-        <CollapsibleSection title="Strategic Implications" defaultOpen={false}>
-          {Array.isArray(data.implications)
-            ? (
-              <ul className="technique-list">
-                {data.implications.map((imp: string, i: number) => (
-                  <li key={i} className="technique-list-item text-secondary">{imp}</li>
-                ))}
-              </ul>
-            )
-            : <p className="text-secondary text-sm">{data.implications}</p>
-          }
+      {/* Cross-Cutting Indicators */}
+      {crossCuttingIndicators.length > 0 && (
+        <CollapsibleSection title="Cross-Cutting Indicators" defaultOpen={true}>
+          <ul className="technique-list">
+            {crossCuttingIndicators.map((ind, i) => (
+              <li key={i} className="technique-list-item technique-list-item-warning text-secondary">{ind}</li>
+            ))}
+          </ul>
         </CollapsibleSection>
       )}
 
-      {/* Planning considerations */}
-      {data.planning_considerations && (
-        <CollapsibleSection title="Planning Considerations" defaultOpen={false}>
-          {Array.isArray(data.planning_considerations)
-            ? (
-              <ul className="technique-list">
-                {data.planning_considerations.map((item: string, i: number) => (
-                  <li key={i} className="technique-list-item text-secondary">{item}</li>
-                ))}
-              </ul>
-            )
-            : <p className="text-secondary text-sm">{data.planning_considerations}</p>
-          }
+      {/* Strategic Implications */}
+      {strategicImplications && (
+        <CollapsibleSection title="Strategic Implications" defaultOpen={false}>
+          <p className="text-secondary text-sm">{strategicImplications}</p>
         </CollapsibleSection>
       )}
     </div>

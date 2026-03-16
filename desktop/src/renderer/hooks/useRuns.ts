@@ -9,32 +9,31 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 
 export function useRuns(dir?: string, limit?: number) {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   return useQuery({
     queryKey: ['runs', dir, limit],
-    queryFn: () => new SatClient(baseUrl!).getRuns(dir, limit),
-    enabled: !!baseUrl,
+    queryFn: () => client!.getRuns(dir, limit),
+    enabled: !!client,
     refetchInterval: 10_000,
   })
 }
 
 export function useRun(runId: string | undefined) {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   return useQuery({
     queryKey: ['run', runId],
-    queryFn: () => new SatClient(baseUrl!).getRun(runId!),
-    enabled: !!baseUrl && !!runId,
+    queryFn: () => client!.getRun(runId!),
+    enabled: !!client && !!runId,
   })
 }
 
 export function useDeleteRun() {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (runId: string) => new SatClient(baseUrl!).deleteRun(runId),
+    mutationFn: (runId: string) => client!.deleteRun(runId),
     onSuccess: () => {
       // Invalidate the runs list so Dashboard re-fetches immediately
       queryClient.invalidateQueries({ queryKey: ['runs'] })
@@ -43,11 +42,11 @@ export function useDeleteRun() {
 }
 
 export function useRenameRun() {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ runId, name }: { runId: string; name: string }) =>
-      new SatClient(baseUrl!).renameRun(runId, name),
+      client!.renameRun(runId, name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['runs'] })
     },
@@ -59,10 +58,10 @@ export function useRenameRun() {
  * Invalidates the runs list on success so Dashboard updates immediately.
  */
 export function useCancelRun() {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (runId: string) => new SatClient(baseUrl!).cancelRun(runId),
+    mutationFn: (runId: string) => client!.cancelRun(runId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['runs'] })
     },
@@ -75,11 +74,11 @@ export function useCancelRun() {
  * Polls every 5 seconds to stay reasonably fresh.
  */
 export function useConcurrencyStatus() {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   return useQuery({
     queryKey: ['concurrency'],
-    queryFn: () => new SatClient(baseUrl!).getConcurrencyStatus(),
-    enabled: !!baseUrl,
+    queryFn: () => client!.getConcurrencyStatus(),
+    enabled: !!client,
     refetchInterval: 5_000,
   })
 }

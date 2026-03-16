@@ -31,6 +31,9 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.9",
     "mypy>=1.14",
+    # Security audit: run `pip-audit` to scan Python dependencies for known CVEs.
+    # Install with: pip install pip-audit
+    # Run with: pip-audit
 ]
 
 [project.scripts]

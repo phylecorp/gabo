@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from sat.api.auth import verify_token
 from sat.api.models import TechniqueInfo
 
 # Import all technique modules so they register themselves before we query the registry.
@@ -16,7 +17,7 @@ from sat.techniques.registry import get_metadata
 router = APIRouter()
 
 
-@router.get("/api/techniques", response_model=list[TechniqueInfo])
+@router.get("/api/techniques", response_model=list[TechniqueInfo], dependencies=[Depends(verify_token)])
 async def list_techniques() -> list[TechniqueInfo]:
     """Return all registered techniques sorted by category and order."""
     metadata = get_metadata()

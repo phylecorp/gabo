@@ -89,7 +89,9 @@ GEMINI_ANALYSIS_MODELS_FALLBACK = [
     {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash"},
     {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro"},
 ]
-GEMINI_RESEARCH_MODELS_FALLBACK: list[dict] = []
+GEMINI_RESEARCH_MODELS_FALLBACK = [
+    {"id": "deep-research-pro-preview-12-2025", "name": "Deep Research Pro", "default": True},
+]
 
 # Simple string defaults for research model resolution (used by resolve_research_model()).
 # Note: PERPLEXITY_RESEARCH_MODELS above provides the curated list for the UI;

@@ -552,51 +552,85 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
     # Phase 5: Generate executive report
     if config.report.enabled:
         try:
-            from sat.report import generate_report
+            from sat.report import generate_report_llm
 
-            report_paths = generate_report(output_dir, fmt=config.report.fmt)
+            # Primary path: LLM-generated intelligence assessment.
+            # Falls back to Jinja2 internally if the LLM call fails.
+            report_paths = await generate_report_llm(
+                output_dir,
+                provider=provider,
+                fmt=config.report.fmt,
+            )
             for rp in report_paths:
                 console.print(f"[green]Report:[/green] {rp}")
         except Exception:
             logger.exception("Report generation failed")
             raise
 
-    # Print final answer
+    # Print final answer — prefer BLUF extracted from report.md (LLM-authored title +
+    # Assessment section), fall back to synthesis bottom_line_assessment, then last
+    # technique summary.  The report.md path is always output_dir / "report.md" when
+    # report generation is enabled and succeeds.
     console.print()
-    if synthesis_result is not None:
-        console.print(
-            Panel(
-                f"[bold]{synthesis_result.bottom_line_assessment}[/bold]",
-                title="[green]Bottom Line[/green]",
-                padding=(1, 2),
-                box=box.ROUNDED,
-            )
-        )
-    elif completed and prior_results:
-        last_result = prior_results[completed[-1]]
-        console.print(
-            Panel(
-                f"[bold]{last_result.summary}[/bold]",
-                title="[green]Summary[/green]",
-                padding=(1, 2),
-                box=box.ROUNDED,
-            )
-        )
+    bluf_shown = False
+    if config.report.enabled:
+        report_md_path = output_dir / "report.md"
+        if report_md_path.exists():
+            try:
+                report_text = report_md_path.read_text(encoding="utf-8")
+                lines = report_text.strip().split("\n")
+                bluf_title: str | None = None
+                assessment_lines: list[str] = []
+                in_assessment = False
+                for line in lines:
+                    if line.startswith("# ") and not line.startswith("## ") and bluf_title is None:
+                        bluf_title = line[2:].strip()
+                        in_assessment = True
+                        continue
+                    if in_assessment:
+                        if line.startswith("## "):
+                            break
+                        assessment_lines.append(line)
+                bluf_assessment = "\n".join(assessment_lines).strip()
+                if bluf_title and bluf_assessment:
+                    console.print(
+                        Panel(
+                            f"[bold]{bluf_assessment}[/bold]",
+                            title=f"[green]{bluf_title}[/green]",
+                            padding=(1, 2),
+                            box=box.ROUNDED,
+                        )
+                    )
+                    bluf_shown = True
+            except Exception:
+                logger.debug("BLUF extraction from report.md failed — falling back to synthesis")
 
-    # List artifacts — use actual paths from the writer rather than
-    # reconstructing them from technique IDs. The writer's counter includes
-    # preprocessing, research, and adversarial artifacts so a naive
-    # 1-indexed position from `completed` would point to the wrong file.
-    artifact_lines = []
-    for artifact in writer.get_technique_artifacts():
-        artifact_lines.append(f"  📄 {artifact.markdown_path}")
-    if synthesis_path:
-        artifact_lines.append(f"  📄 {synthesis_path}")
+    if not bluf_shown:
+        if synthesis_result is not None:
+            console.print(
+                Panel(
+                    f"[bold]{synthesis_result.bottom_line_assessment}[/bold]",
+                    title="[green]Bottom Line[/green]",
+                    padding=(1, 2),
+                    box=box.ROUNDED,
+                )
+            )
+        elif completed and prior_results:
+            last_result = prior_results[completed[-1]]
+            console.print(
+                Panel(
+                    f"[bold]{last_result.summary}[/bold]",
+                    title="[green]Summary[/green]",
+                    padding=(1, 2),
+                    box=box.ROUNDED,
+                )
+            )
 
+    # Compact artifacts panel — technique count and output dir only.
     console.print(
         Panel(
             f"Techniques: {len(completed)}/{len(technique_ids)} completed\n"
-            f"Output: {output_dir}\n\n" + "\n".join(artifact_lines),
+            f"Output: {output_dir}",
             title="[green]Artifacts[/green]",
             box=box.ROUNDED,
         )

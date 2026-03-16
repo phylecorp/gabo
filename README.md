@@ -155,12 +155,11 @@ This starts the Electron app in development mode. The app launches a local API s
 
 ## What's Next
 
-This is an early release. There are many bugs. Future releases will include:
+Recent releases shipped Trident adversarial mode (three-model debate), LLM-generated intelligence reports, universal evidence persistence, and security hardening across the stack. Coming up:
 
 - Packaged desktop installers (macOS, Windows, Linux)
-- Additional research backends and evidence ingestion formats
-- Expanded report generation and export options
-- Trident adversarial mode (three-model debate with investigator and convergence assessment)
+- Dynamic model selection across all pipeline stages
+- Iterative Brave research with follow-up queries
 
 ---
 

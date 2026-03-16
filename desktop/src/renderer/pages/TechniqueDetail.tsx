@@ -13,7 +13,6 @@
 import { useParams, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 import { useRun } from '../hooks/useRuns'
 import { useTechniques } from '../hooks/useTechniques'
 import IntelCard from '../components/common/IntelCard'
@@ -64,7 +63,7 @@ function JsonFallback({ data }: { data: any }) {
 export default function TechniqueDetail() {
   const { runId, techniqueId } = useParams<{ runId: string; techniqueId: string }>()
   const navigate = useNavigate()
-  const { baseUrl } = useApiContext()
+  const { baseUrl, client } = useApiContext()
 
   const { data: run, isLoading: runLoading, error: runError } = useRun(runId)
   const { data: techniques } = useTechniques()
@@ -81,7 +80,7 @@ export default function TechniqueDetail() {
   } = useQuery({
     queryKey: ['artifact', runId, techniqueId, artifact?.json_path],
     queryFn: () =>
-      new SatClient(baseUrl!).getRunArtifact(runId!, artifact!.json_path!),
+      client!.getRunArtifact(runId!, artifact!.json_path!),
     enabled: !!baseUrl && !!runId && !!artifact?.json_path,
   })
 
@@ -138,7 +137,7 @@ export default function TechniqueDetail() {
             <button
               className="btn-secondary ml-auto"
               onClick={() => {
-                new SatClient(baseUrl).downloadArtifact(runId!, artifact.json_path!).then(blob => {
+                client!.downloadArtifact(runId!, artifact.json_path!).then(blob => {
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')
                   a.href = url

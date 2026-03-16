@@ -6,6 +6,17 @@
  *   with retry: 1). The client stays thin — just URL construction, JSON parsing,
  *   and error surfacing. A class is used instead of plain functions so the baseUrl
  *   is captured once per QueryClient call rather than re-read from context.
+ *
+ * @decision DEC-AUTH-008
+ * @title SatClient accepts authToken and injects Authorization + WS token
+ * @status accepted
+ * @rationale The auth token is fetched once at startup and stored in ApiContext.
+ *   SatClient receives it at construction time. The private request() method
+ *   merges the Authorization: Bearer header into every fetch call. Direct fetch
+ *   calls (getRunReport, downloadArtifact, downloadExport) also include the header.
+ *   buildWsUrl() appends ?token=<token> to WebSocket URLs since the WS API does
+ *   not support custom headers. Empty token (dev mode) sends no auth header,
+ *   which works when the server has SAT_DISABLE_AUTH=1.
  */
 import type {
   AnalysisRequest,
@@ -25,15 +36,41 @@ import type {
   CuratedAnalysisRequest,
   PoolRequest,
   PoolResponse,
+  ModelsResponse,
 } from './types'
 
 export class SatClient {
-  constructor(private baseUrl: string) {}
+  constructor(
+    private baseUrl: string,
+    private authToken: string = '',
+  ) {}
+
+  /** Build Authorization header object — empty if no token (dev mode). */
+  private authHeaders(): Record<string, string> {
+    return this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {}
+  }
+
+  /**
+   * Append ?token=<authToken> to a WebSocket URL for WS auth.
+   * Returns the URL unchanged if no token is set.
+   */
+  buildWsUrl(wsUrl: string): string {
+    if (!this.authToken) return wsUrl
+    const separator = wsUrl.includes('?') ? '&' : '?'
+    return `${wsUrl}${separator}token=${encodeURIComponent(this.authToken)}`
+  }
 
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.authHeaders(),
+      },
       ...options,
+      // Merge caller-provided headers on top of auth headers
+      ...(options?.headers
+        ? { headers: { 'Content-Type': 'application/json', ...this.authHeaders(), ...options.headers } }
+        : {}),
     })
     if (!res.ok) {
       const text = await res.text()
@@ -79,7 +116,9 @@ export class SatClient {
   }
 
   async getRunReport(runId: string, fmt: string = 'html') {
-    const res = await fetch(`${this.baseUrl}/api/runs/${runId}/report?fmt=${fmt}`)
+    const res = await fetch(`${this.baseUrl}/api/runs/${runId}/report?fmt=${fmt}`, {
+      headers: this.authHeaders(),
+    })
     if (!res.ok) throw new Error(`Report fetch failed: ${res.status}`)
     return res.text()
   }
@@ -93,14 +132,17 @@ export class SatClient {
 
   async downloadArtifact(runId: string, path: string): Promise<Blob> {
     const res = await fetch(
-      `${this.baseUrl}/api/runs/${runId}/artifact/download?path=${encodeURIComponent(path)}`
+      `${this.baseUrl}/api/runs/${runId}/artifact/download?path=${encodeURIComponent(path)}`,
+      { headers: this.authHeaders() }
     )
     if (!res.ok) throw new Error(`Download failed: ${res.status}`)
     return res.blob()
   }
 
   async downloadExport(runId: string): Promise<Blob> {
-    const res = await fetch(`${this.baseUrl}/api/runs/${runId}/export`)
+    const res = await fetch(`${this.baseUrl}/api/runs/${runId}/export`, {
+      headers: this.authHeaders(),
+    })
     if (!res.ok) throw new Error(`Export failed: ${res.status}`)
     return res.blob()
   }
@@ -178,5 +220,9 @@ export class SatClient {
 
   async getConcurrencyStatus() {
     return this.request<ConcurrencyStatus>('/api/concurrency')
+  }
+
+  async getModels(provider: string) {
+    return this.request<ModelsResponse>(`/api/config/models/${encodeURIComponent(provider)}`)
   }
 }

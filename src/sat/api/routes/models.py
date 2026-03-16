@@ -21,6 +21,17 @@ when the API key hash changes, ensuring users who rotate keys see fresh lists.
 case where a user switches from one account (with access to some models) to
 another account (with different model access). The hash uses only the first
 8 chars — sufficient to detect a change without storing the full key.
+
+@decision DEC-MODELS-003
+@title Gemini model listing uses REST API (httpx) instead of google.generativeai SDK
+@status accepted
+@rationale google.generativeai is not a declared dependency and was not
+installed in the project's environment, causing _list_gemini() to always fall
+back to the curated list with 0 research models. The Gemini REST API
+(generativelanguage.googleapis.com/v1beta/models) is publicly documented, does
+not require a client library, and httpx is already a FastAPI dependency. This
+ensures the Gemini research dropdown actually lists available deep-research
+models when a valid API key is present.
 """
 
 from __future__ import annotations
@@ -32,6 +43,7 @@ import time
 from copy import deepcopy
 from typing import Any
 
+import httpx
 from fastapi import APIRouter
 
 # Optional provider SDK imports — available at module level for test patching.
@@ -41,11 +53,6 @@ try:
     import openai  # type: ignore[import]
 except ImportError:
     openai = None  # type: ignore[assignment]
-
-try:
-    import google.generativeai as genai  # type: ignore[import]
-except ImportError:
-    genai = None  # type: ignore[assignment]
 
 from sat.config import (
     ANTHROPIC_ANALYSIS_MODELS,
@@ -286,24 +293,29 @@ def _openai_display_name(model_id: str) -> str:
 
 
 def _list_gemini(api_key: str | None) -> tuple[dict[str, list[dict]], str | None]:
-    """Fetch Gemini models via google.generativeai, categorize, and filter.
+    """Fetch Gemini models via the REST API, categorize, and filter.
+
+    Uses GET https://generativelanguage.googleapis.com/v1beta/models?key={api_key}
+    rather than the google.generativeai SDK, which is not a declared dependency.
+    See DEC-MODELS-003 for rationale.
 
     Returns (models_dict, error_string_or_None).
     Falls back to curated list on any failure.
     """
-    if genai is None:
+    if not api_key:
         return (
             {
                 "analysis": deepcopy(GEMINI_ANALYSIS_MODELS_FALLBACK),
                 "research": deepcopy(GEMINI_RESEARCH_MODELS_FALLBACK),
             },
-            "google-generativeai package not installed",
+            "no Gemini API key configured",
         )
 
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     try:
-        if api_key:
-            genai.configure(api_key=api_key)
-        raw_models = list(genai.list_models())
+        response = httpx.get(url, timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Gemini model listing failed: %s", exc)
         return (
@@ -314,22 +326,23 @@ def _list_gemini(api_key: str | None) -> tuple[dict[str, list[dict]], str | None
             str(exc),
         )
 
+    raw_models = data.get("models", [])
     analysis: list[dict] = []
     research: list[dict] = []
     default_analysis = DEFAULT_MODELS.get("gemini", "gemini-2.5-pro")
 
     for m in raw_models:
         # Filter: only include models that support generateContent
-        methods = getattr(m, "supported_generation_methods", [])
+        methods = m.get("supportedGenerationMethods", [])
         if "generateContent" not in methods:
             continue
 
-        # model.name is like "models/gemini-2.5-pro" — strip the prefix
-        full_name: str = m.name
+        # m["name"] is like "models/gemini-2.5-pro" — strip the prefix
+        full_name: str = m.get("name", "")
         model_id = full_name.removeprefix("models/")
         model_id_lower = model_id.lower()
 
-        display_name = _gemini_display_name(model_id)
+        display_name = m.get("displayName") or _gemini_display_name(model_id)
         entry: dict = {"id": model_id, "name": display_name}
 
         if "deep-research" in model_id_lower:
@@ -378,7 +391,7 @@ async def list_models(provider: str) -> dict:
     - perplexity: curated list (all models are research category)
     - brave: empty lists (search API, no model concept)
     - openai: fetched via openai.models.list(), fallback to curated on failure
-    - gemini: fetched via genai.list_models(), fallback to curated on failure
+    - gemini: fetched via REST API (generativelanguage.googleapis.com), fallback to curated on failure
 
     Returns:
         {

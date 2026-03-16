@@ -9,6 +9,16 @@
  *   analytical value of multi-technique analysis. Uncertainties and gaps are
  *   demoted to the bottom since they are actionable future tasking, not the
  *   primary analytical product.
+ *
+ * @decision DEC-DESKTOP-SYNTHESIS-PANEL-002
+ * @title All sections below BLA collapse by default (BLUF-first display)
+ * @status accepted
+ * @rationale The BLA IS the BLUF — it must be immediately visible and scannable.
+ *   All detail sections (key findings, convergent/divergent judgments, confidence
+ *   assessments, uncertainties, gaps, next steps) are collapsed by default so the
+ *   reader sees the bottom line without visual clutter. Users who want detail expand
+ *   sections selectively. This matches how a policymaker reads an intelligence brief:
+ *   bottom line first, supporting detail on demand.
  */
 import type { SynthesisResult, TechniqueFinding } from '../../api/types'
 import IntelBadge from '../common/IntelBadge'
@@ -34,8 +44,7 @@ export default function SynthesisPanel({ synthesis }: SynthesisPanelProps) {
       </div>
 
       {synthesis.key_findings.length > 0 && (
-        <div className="synthesis-section">
-          <div className="synthesis-section-title">Key Findings</div>
+        <CollapsibleSection title="Key Findings" count={synthesis.key_findings.length} defaultOpen={false}>
           <div className="synthesis-findings-list">
             {synthesis.key_findings.map((f: TechniqueFinding, i: number) => (
               <div key={i} className="synthesis-finding-row">
@@ -51,39 +60,31 @@ export default function SynthesisPanel({ synthesis }: SynthesisPanelProps) {
               </div>
             ))}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
-      <div className="synthesis-two-col">
-        {synthesis.convergent_judgments.length > 0 && (
-          <div className="synthesis-convergent">
-            <div className="synthesis-section-title synthesis-section-title-green">
-              Convergent Judgments
-            </div>
-            <ul className="synthesis-list">
-              {synthesis.convergent_judgments.map((j, i) => (
-                <li key={i} className="synthesis-list-item synthesis-list-item-green">{j}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+      {synthesis.convergent_judgments.length > 0 && (
+        <CollapsibleSection title="Convergent Judgments" count={synthesis.convergent_judgments.length} defaultOpen={false}>
+          <ul className="synthesis-list">
+            {synthesis.convergent_judgments.map((j, i) => (
+              <li key={i} className="synthesis-list-item synthesis-list-item-green">{j}</li>
+            ))}
+          </ul>
+        </CollapsibleSection>
+      )}
 
-        {synthesis.divergent_signals.length > 0 && (
-          <div className="synthesis-divergent">
-            <div className="synthesis-section-title synthesis-section-title-amber">
-              Divergent Signals
-            </div>
-            <ul className="synthesis-list">
-              {synthesis.divergent_signals.map((s, i) => (
-                <li key={i} className="synthesis-list-item synthesis-list-item-amber">{s}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
+      {synthesis.divergent_signals.length > 0 && (
+        <CollapsibleSection title="Divergent Signals" count={synthesis.divergent_signals.length} defaultOpen={false}>
+          <ul className="synthesis-list">
+            {synthesis.divergent_signals.map((s, i) => (
+              <li key={i} className="synthesis-list-item synthesis-list-item-amber">{s}</li>
+            ))}
+          </ul>
+        </CollapsibleSection>
+      )}
 
       {synthesis.highest_confidence_assessments.length > 0 && (
-        <CollapsibleSection title="Highest Confidence Assessments" count={synthesis.highest_confidence_assessments.length}>
+        <CollapsibleSection title="Highest Confidence Assessments" count={synthesis.highest_confidence_assessments.length} defaultOpen={false}>
           <ul className="synthesis-list">
             {synthesis.highest_confidence_assessments.map((a, i) => (
               <li key={i} className="synthesis-list-item synthesis-list-item-green">{a}</li>

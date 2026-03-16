@@ -82,6 +82,10 @@ export interface RunDetail extends RunSummary {
   artifacts: Artifact[]
   synthesis_path: string | null
   evidence_path?: string | null
+  /** Full synthesis JSON inlined for completed runs; null for in-progress or missing (DEC-API-011). */
+  synthesis_content?: Record<string, any> | null
+  /** technique_id → summary_text, inlined for completed runs; null when no artifacts (DEC-API-011). */
+  technique_summaries?: Record<string, string> | null
 }
 
 // ACH specific
@@ -204,6 +208,7 @@ export interface ConvergenceResult {
 export interface ProviderSettings {
   api_key: string
   default_model: string
+  research_model?: string
 }
 
 export interface AppSettings {
@@ -214,7 +219,27 @@ export interface ProviderSettingsResponse {
   has_api_key: boolean
   api_key_preview: string
   default_model: string
+  research_model: string
   source: string
+}
+
+// Models endpoint — GET /api/config/models/{provider}
+export interface ModelInfo {
+  id: string
+  name: string
+  default?: boolean
+}
+
+export interface ProviderModels {
+  analysis: ModelInfo[]
+  research: ModelInfo[]
+}
+
+export interface ModelsResponse {
+  provider: string
+  models: ProviderModels
+  cached: boolean
+  error?: string | null
 }
 
 export interface SettingsResponse {

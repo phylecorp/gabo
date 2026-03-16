@@ -23,10 +23,17 @@
  *   The SET_PREBUILT_POOL action injects that pool + sessionId directly into the reducer
  *   state (status=ready), so EvidenceReview renders immediately. The existing gather flow
  *   (WebSocket) is unchanged — this is an additive path for the "Run Analysis" button.
+ *
+ * @decision DEC-AUTH-011
+ * @title evidenceContext uses client from ApiContext to include auth token
+ * @status accepted
+ * @rationale SatClient is constructed with the auth token in ApiProvider (DEC-AUTH-009).
+ *   EvidenceGatheringProvider reads client from ApiContext rather than constructing its
+ *   own SatClient, ensuring the token flows through all API calls. WebSocket URLs use
+ *   client.buildWsUrl() to append ?token=<token> for WS auth.
  */
 import { createContext, useContext, useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { useApiContext } from './context'
-import { SatClient } from './client'
 import { AnalysisWebSocket } from './ws'
 import type {
   EvidenceGatherRequest,
@@ -290,24 +297,24 @@ const EvidenceGatheringContext = createContext<EvidenceGatheringContextValue | n
 // ---------------------------------------------------------------------------
 
 export function EvidenceGatheringProvider({ children }: { children: ReactNode }) {
-  const { baseUrl, wsBaseUrl } = useApiContext()
+  const { wsBaseUrl, client } = useApiContext()
   const [state, dispatch] = useReducer(reducer, initialState)
   const wsRef = useRef<AnalysisWebSocket | null>(null)
   const sessionIdRef = useRef<string | null>(null)
 
   const gatherEvidence = useCallback(async (request: EvidenceGatherRequest): Promise<void> => {
-    if (!baseUrl || !wsBaseUrl) return
+    if (!client || !wsBaseUrl) return
 
     dispatch({ type: 'CONNECTING' })
 
-    const client = new SatClient(baseUrl)
     const response = await client.gatherEvidence(request)
 
     sessionIdRef.current = response.session_id
     dispatch({ type: 'SET_SESSION', sessionId: response.session_id })
 
-    // Connect WebSocket to evidence gathering stream
-    const wsUrl = `${wsBaseUrl}/ws/evidence/${response.session_id}`
+    // Connect WebSocket to evidence gathering stream — append auth token as query param
+    const rawWsUrl = `${wsBaseUrl}/ws/evidence/${response.session_id}`
+    const wsUrl = client.buildWsUrl(rawWsUrl)
     const ws = new AnalysisWebSocket(wsUrl, false)
     wsRef.current = ws
 
@@ -329,7 +336,7 @@ export function EvidenceGatheringProvider({ children }: { children: ReactNode })
     })
 
     ws.connect()
-  }, [baseUrl, wsBaseUrl])
+  }, [client, wsBaseUrl])
 
   const toggleItem = useCallback((itemId: string) => {
     dispatch({ type: 'TOGGLE_ITEM', itemId })

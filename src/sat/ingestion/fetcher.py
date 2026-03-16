@@ -6,6 +6,17 @@
 @rationale httpx is already a core dependency and provides async HTTP. Content is fetched,
 saved to a temp file with the correct extension, and routed through parse_document().
 HTML content is parsed directly when Docling is not available.
+
+@decision DEC-SEC-012
+@title SSRF protection applied before every URL fetch in the ingestion layer
+@status accepted
+@rationale Evidence sources may include arbitrary user-supplied URLs. Without
+SSRF protection, a user could supply http://169.254.169.254/ (AWS metadata) or
+http://192.168.1.1/ to exfiltrate data from the server's local network. The
+validate_url_not_ssrf() call before the HTTP request rejects any URL whose
+hostname resolves to a private, loopback, or link-local IP range. SSRF
+validation failures are treated as fetch errors and returned as parse_warnings
+rather than raising — consistent with the existing error handling pattern.
 """
 
 from __future__ import annotations
@@ -18,6 +29,7 @@ import httpx
 
 from sat.ingestion.parser import parse_document
 from sat.models.ingestion import ParsedDocument
+from sat.utils.url_validation import validate_url_not_ssrf
 
 MIME_TO_EXT: dict[str, str] = {
     "application/pdf": ".pdf",
@@ -46,6 +58,10 @@ async def fetch_and_parse(url: str, timeout: float = 30.0) -> ParsedDocument:
     source_id = hashlib.md5(url.encode()).hexdigest()[:8]
 
     try:
+        # SSRF protection: reject private/loopback/link-local URLs before
+        # making any HTTP connection (DEC-SEC-012).
+        validate_url_not_ssrf(url)
+
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             response = await client.get(url)
             response.raise_for_status()

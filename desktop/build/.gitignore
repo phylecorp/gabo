@@ -1,0 +1,7 @@
+# Un-ignore icon source files — these are intentional assets, not build artifacts.
+# The root .gitignore blanket-ignores build/ directories, but desktop/build/
+# contains app icon source files that must be tracked in version control.
+!*.svg
+!*.png
+!*.icns
+!*.ico

@@ -2,23 +2,6 @@
 # Start SAT Desktop in dev mode (FastAPI backend + Electron frontend)
 set -e
 
-NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
-if [ "$NODE_MAJOR" -ge 25 ]; then
-  echo "Node $NODE_MAJOR detected — electron-vite requires Node 20-24."
-  if [ -s "$HOME/.nvm/nvm.sh" ]; then
-    . "$HOME/.nvm/nvm.sh"
-    echo "Switching to Node 22 via nvm..."
-    nvm install 22 --lts 2>/dev/null || true
-    nvm use 22
-    NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
-  fi
-  if [ "$NODE_MAJOR" -ge 25 ]; then
-    echo "Error: Could not switch to a supported Node version."
-    echo "  Install Node 22 LTS manually, or: nvm install 22 && nvm use 22"
-    exit 1
-  fi
-fi
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DESKTOP="$ROOT/desktop"
 API_PORT=8742
@@ -42,7 +25,7 @@ fi
 
 # Start FastAPI backend
 echo "Starting API server on port $API_PORT..."
-"$ROOT/venv/bin/python" -m sat.api.main --port "$API_PORT" &
+SAT_DISABLE_AUTH=1 "$ROOT/venv/bin/python" -m sat.api.main --port "$API_PORT" &
 API_PID=$!
 
 # Kill backend on exit

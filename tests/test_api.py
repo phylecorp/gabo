@@ -660,3 +660,267 @@ def test_generate_report_missing_manifest_returns_400(client, tmp_path):
     resp = client.post(f"/api/runs/{run_id}/report/generate?dir={tmp_path}")
     # Run is not findable without manifest.json, so _find_output_dir returns None -> 404
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Bundled synthesis_content and technique_summaries in RunDetail
+# ---------------------------------------------------------------------------
+
+
+def _make_completed_run_dir(tmp_path, run_id: str, *, with_synthesis: bool = True, with_artifacts: bool = True) -> tuple:
+    """Helper: create a completed run directory with manifest, synthesis, and artifact JSON files.
+
+    Returns (output_dir, artifact_data, synthesis_data).
+    """
+    import json as _json
+
+    output_dir = tmp_path / f"sat-{run_id}"
+    output_dir.mkdir()
+
+    # Artifact JSON
+    artifact_data = {
+        "technique_id": "key_assumptions_check",
+        "technique_name": "Key Assumptions Check",
+        "summary": "Key assumption summary text",
+        "assumptions": [],
+    }
+    artifact_file = output_dir / "01-key_assumptions_check.json"
+    artifact_file.write_text(_json.dumps(artifact_data))
+
+    # Synthesis JSON
+    synthesis_data = {
+        "technique_id": "synthesis",
+        "technique_name": "Synthesis",
+        "summary": "Overall synthesis summary",
+        "question": "What is happening?",
+        "techniques_applied": ["key_assumptions_check"],
+        "key_findings": [],
+        "convergent_judgments": [],
+        "divergent_signals": [],
+        "highest_confidence_assessments": [],
+        "remaining_uncertainties": [],
+        "intelligence_gaps": [],
+        "recommended_next_steps": [],
+        "bottom_line_assessment": "Bottom line here",
+    }
+    synthesis_file = output_dir / "synthesis.json"
+    if with_synthesis:
+        synthesis_file.write_text(_json.dumps(synthesis_data))
+
+    manifest = {
+        "run_id": run_id,
+        "question": "What is happening?",
+        "started_at": "2025-01-01T00:00:00Z",
+        "completed_at": "2025-01-01T01:00:00Z",
+        "techniques_selected": ["key_assumptions_check"],
+        "techniques_completed": ["key_assumptions_check"],
+        "artifacts": [
+            {
+                "technique_id": "key_assumptions_check",
+                "technique_name": "Key Assumptions Check",
+                "category": "diagnostic",
+                "markdown_path": str(output_dir / "01-key_assumptions_check.md"),
+                "json_path": str(artifact_file) if with_artifacts else None,
+            }
+        ] if with_artifacts else [],
+        "synthesis_path": str(synthesis_file) if with_synthesis else None,
+    }
+    (output_dir / "manifest.json").write_text(_json.dumps(manifest))
+
+    return output_dir, artifact_data, synthesis_data
+
+
+def test_run_detail_includes_synthesis_content_for_completed_run(client, tmp_path):
+    """GET /api/runs/{run_id} bundles synthesis_content for completed runs."""
+    run_id = "synthbundle"
+    _make_completed_run_dir(tmp_path, run_id, with_synthesis=True)
+
+    resp = client.get(f"/api/runs/{run_id}?dir={tmp_path}")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert "synthesis_content" in body, "synthesis_content field must be present"
+    assert body["synthesis_content"] is not None, "synthesis_content must be non-null for completed runs with synthesis"
+    assert body["synthesis_content"]["summary"] == "Overall synthesis summary"
+    assert body["synthesis_content"]["bottom_line_assessment"] == "Bottom line here"
+
+
+def test_run_detail_includes_technique_summaries_for_completed_run(client, tmp_path):
+    """GET /api/runs/{run_id} bundles technique_summaries for completed runs."""
+    run_id = "summbundle"
+    _make_completed_run_dir(tmp_path, run_id)
+
+    resp = client.get(f"/api/runs/{run_id}?dir={tmp_path}")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert "technique_summaries" in body, "technique_summaries field must be present"
+    assert body["technique_summaries"] is not None, "technique_summaries must be non-null for completed runs with artifacts"
+    assert "key_assumptions_check" in body["technique_summaries"]
+    assert body["technique_summaries"]["key_assumptions_check"] == "Key assumption summary text"
+
+
+def test_run_detail_synthesis_content_none_when_no_synthesis_path(client, tmp_path):
+    """synthesis_content is None when synthesis_path is absent."""
+    run_id = "nosynthpath"
+    _make_completed_run_dir(tmp_path, run_id, with_synthesis=False)
+
+    resp = client.get(f"/api/runs/{run_id}?dir={tmp_path}")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert "synthesis_content" in body
+    assert body["synthesis_content"] is None
+
+
+def test_run_detail_synthesis_content_none_when_file_missing(client, tmp_path):
+    """synthesis_content is None when synthesis_path is set but file is missing."""
+    import json as _json
+
+    run_id = "synthfilemiss"
+    output_dir = tmp_path / f"sat-{run_id}"
+    output_dir.mkdir()
+
+    # synthesis_path points to a non-existent file
+    manifest = {
+        "run_id": run_id,
+        "question": "Test?",
+        "started_at": "2025-01-01T00:00:00Z",
+        "completed_at": "2025-01-01T01:00:00Z",
+        "techniques_selected": [],
+        "techniques_completed": [],
+        "artifacts": [],
+        "synthesis_path": str(output_dir / "synthesis.json"),  # File won't exist
+    }
+    (output_dir / "manifest.json").write_text(_json.dumps(manifest))
+    # synthesis.json is intentionally NOT created
+
+    resp = client.get(f"/api/runs/{run_id}?dir={tmp_path}")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["synthesis_content"] is None
+
+
+def test_run_detail_technique_summaries_none_when_no_artifacts(client, tmp_path):
+    """technique_summaries is None when there are no artifacts with json_path."""
+    import json as _json
+
+    run_id = "noartifacts"
+    output_dir = tmp_path / f"sat-{run_id}"
+    output_dir.mkdir()
+
+    manifest = {
+        "run_id": run_id,
+        "question": "Test?",
+        "started_at": "2025-01-01T00:00:00Z",
+        "completed_at": "2025-01-01T01:00:00Z",
+        "techniques_selected": [],
+        "techniques_completed": [],
+        "artifacts": [],
+    }
+    (output_dir / "manifest.json").write_text(_json.dumps(manifest))
+
+    resp = client.get(f"/api/runs/{run_id}?dir={tmp_path}")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert "technique_summaries" in body
+    assert body["technique_summaries"] is None
+
+
+def test_run_detail_technique_summaries_skips_missing_files(client, tmp_path):
+    """technique_summaries gracefully skips artifacts whose json_path files are missing."""
+    import json as _json
+
+    run_id = "summpartial"
+    output_dir = tmp_path / f"sat-{run_id}"
+    output_dir.mkdir()
+
+    # Only one artifact has a real json_path file; the other points to a missing file
+    real_data = {"technique_id": "acm", "technique_name": "ACM", "summary": "ACM summary"}
+    real_file = output_dir / "01-acm.json"
+    real_file.write_text(_json.dumps(real_data))
+
+    manifest = {
+        "run_id": run_id,
+        "question": "Test?",
+        "started_at": "2025-01-01T00:00:00Z",
+        "completed_at": "2025-01-01T01:00:00Z",
+        "techniques_selected": ["acm", "kac"],
+        "techniques_completed": ["acm"],
+        "artifacts": [
+            {
+                "technique_id": "acm",
+                "technique_name": "ACM",
+                "category": "diagnostic",
+                "markdown_path": str(output_dir / "01-acm.md"),
+                "json_path": str(real_file),
+            },
+            {
+                "technique_id": "kac",
+                "technique_name": "KAC",
+                "category": "diagnostic",
+                "markdown_path": str(output_dir / "02-kac.md"),
+                "json_path": str(output_dir / "02-kac.json"),  # Does NOT exist
+            },
+        ],
+    }
+    (output_dir / "manifest.json").write_text(_json.dumps(manifest))
+
+    resp = client.get(f"/api/runs/{run_id}?dir={tmp_path}")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["technique_summaries"] is not None
+    assert "acm" in body["technique_summaries"]
+    assert body["technique_summaries"]["acm"] == "ACM summary"
+    # kac file doesn't exist, so it should be absent (not cause an error)
+    assert "kac" not in body["technique_summaries"]
+
+
+def test_run_detail_synthesis_path_prefix_stripped(client, tmp_path):
+    """synthesis_path with sat-{run_id}/ prefix is resolved correctly (DEC-API-008)."""
+    import json as _json
+
+    run_id = "synthprefix"
+    output_dir = tmp_path / f"sat-{run_id}"
+    output_dir.mkdir()
+
+    synthesis_data = {
+        "technique_id": "synthesis",
+        "technique_name": "Synthesis",
+        "summary": "Prefixed synthesis summary",
+        "question": "What is happening?",
+        "techniques_applied": [],
+        "key_findings": [],
+        "convergent_judgments": [],
+        "divergent_signals": [],
+        "highest_confidence_assessments": [],
+        "remaining_uncertainties": [],
+        "intelligence_gaps": [],
+        "recommended_next_steps": [],
+        "bottom_line_assessment": "Bottom line",
+    }
+    synthesis_file = output_dir / "synthesis.json"
+    synthesis_file.write_text(_json.dumps(synthesis_data))
+
+    # Manifest stores path with the run dir prefix (DEC-API-008 pattern)
+    manifest = {
+        "run_id": run_id,
+        "question": "What is happening?",
+        "started_at": "2025-01-01T00:00:00Z",
+        "completed_at": "2025-01-01T01:00:00Z",
+        "techniques_selected": [],
+        "techniques_completed": [],
+        "artifacts": [],
+        "synthesis_path": f"sat-{run_id}/synthesis.json",  # prefixed path
+    }
+    (output_dir / "manifest.json").write_text(_json.dumps(manifest))
+
+    resp = client.get(f"/api/runs/{run_id}?dir={tmp_path}")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["synthesis_content"] is not None
+    assert body["synthesis_content"]["summary"] == "Prefixed synthesis summary"

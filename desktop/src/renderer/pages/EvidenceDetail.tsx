@@ -14,13 +14,12 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router'
 import { useRun } from '../hooks/useRuns'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 import type { EvidencePool } from '../api/types'
 
 export default function EvidenceDetail() {
   const { runId } = useParams<{ runId: string }>()
   const navigate = useNavigate()
-  const { baseUrl } = useApiContext()
+  const { baseUrl, client } = useApiContext()
 
   const { data: run, isLoading: runLoading } = useRun(runId)
   const [pool, setPool] = useState<EvidencePool | null>(null)
@@ -31,7 +30,7 @@ export default function EvidenceDetail() {
     if (!runId || !baseUrl) return
     setLoading(true)
     setError(null)
-    const client = new SatClient(baseUrl)
+    const client = client!
     client.getRunEvidence(runId)
       .then(data => {
         setPool(data)

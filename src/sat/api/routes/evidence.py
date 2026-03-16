@@ -36,7 +36,6 @@ Document items use "DOC-<n>" IDs and "document" source; user text items use "U-<
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING
 import logging
 from datetime import UTC, datetime
@@ -65,6 +64,7 @@ from sat.config import (
 from sat.evidence import gather_evidence
 from sat.evidence.formatter import format_curated_evidence
 from sat.evidence.gatherer import _split_to_user_items
+from sat.evidence.persistence import persist_evidence
 from sat.ingestion import ingest_evidence
 from sat.models.evidence import EvidenceItem, EvidencePool
 from sat.pipeline import run_analysis
@@ -112,25 +112,6 @@ async def _broadcast_run(run: ActiveRun, event_dict: dict) -> None:
         if ws in run.ws_clients:
             run.ws_clients.remove(ws)
 
-
-def _persist_evidence(output_path: Path, pool: EvidencePool) -> None:
-    """Write the curated EvidencePool to evidence.json and update manifest.json.
-
-    Writes ``evidence.json`` to *output_path* and then patches ``manifest.json``
-    in the same directory to set ``evidence_path = "evidence.json"``.
-
-    Called after run_analysis() completes with a known output_path. Errors
-    from this function are best-effort — the caller logs and suppresses them so
-    a persistence failure does not mask the real pipeline result (DEC-API-013).
-    """
-    evidence_file = output_path / "evidence.json"
-    evidence_file.write_text(pool.model_dump_json(), encoding="utf-8")
-
-    manifest_file = output_path / "manifest.json"
-    if manifest_file.exists():
-        data = json.loads(manifest_file.read_text(encoding="utf-8"))
-        data["evidence_path"] = "evidence.json"
-        manifest_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def create_evidence_router(
@@ -201,13 +182,18 @@ def create_evidence_router(
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
                 await _broadcast_session(session, completion)
-            except Exception as e:
+            except Exception:
+                # Log full exception server-side; broadcast only a generic message
+                # to avoid leaking API keys or internal details (DEC-SEC-006).
                 logger.exception("Evidence gathering failed for session %s", session.session_id)
                 session.status = "failed"
-                session.error = str(e)
+                session.error = "Evidence gathering failed — check server logs for details"
                 error_event = {
                     "type": "evidence_failed",
-                    "data": {"error": str(e), "session_id": session.session_id},
+                    "data": {
+                        "error": "Evidence gathering failed — check server logs for details",
+                        "session_id": session.session_id,
+                    },
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
                 await _broadcast_session(session, error_event)
@@ -328,7 +314,7 @@ def create_evidence_router(
                 # Persist the curated EvidencePool as evidence.json in the output
                 # directory and update manifest.json with evidence_path (DEC-API-013).
                 try:
-                    _persist_evidence(output_path, curated_pool)
+                    persist_evidence(output_path, curated_pool)
                 except Exception:
                     logger.warning(
                         "Failed to persist evidence.json for run %s",
@@ -342,13 +328,18 @@ def create_evidence_router(
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
                 await _broadcast_run(run, completion)
-            except Exception as e:
+            except Exception:
+                # Log full exception server-side; broadcast only a generic message
+                # to avoid leaking API keys or internal details (DEC-SEC-006).
                 logger.exception("Curated analysis failed for run %s", run.run_id)
                 run.status = "failed"
-                run.error = str(e)
+                run.error = "Analysis failed — check server logs for details"
                 error_event = {
                     "type": "run_failed",
-                    "data": {"error": str(e), "run_id": run.run_id},
+                    "data": {
+                        "error": "Analysis failed — check server logs for details",
+                        "run_id": run.run_id,
+                    },
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
                 await _broadcast_run(run, error_event)

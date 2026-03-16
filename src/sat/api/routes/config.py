@@ -43,6 +43,7 @@ keeps the model field since users may want to use a different sonar variant.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -58,6 +59,8 @@ from sat.api.models import (
     TestProviderResponse,
 )
 from sat.config import DEFAULT_MODELS, PROVIDER_API_KEY_ENVS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -130,17 +133,19 @@ def _load_settings(config_path: Path) -> SettingsResponse:
             has_key = True
             preview = _mask_key(file_key)
             source = "config_file"
-            model = file_model or DEFAULT_MODELS.get(name, "")
         elif env_key:
             has_key = True
             preview = _mask_key(env_key)
             source = "environment"
-            model = DEFAULT_MODELS.get(name, "")
         else:
             has_key = False
             preview = ""
             source = "default"
-            model = DEFAULT_MODELS.get(name, "")
+
+        # Model selection is independent of where the API key comes from.
+        # Always prefer the user-saved model from the config file; fall back
+        # to DEFAULT_MODELS only when no model has been saved.
+        model = file_model or DEFAULT_MODELS.get(name, "")
 
         providers[name] = ProviderSettingsResponse(
             has_api_key=has_key,
@@ -154,7 +159,13 @@ def _load_settings(config_path: Path) -> SettingsResponse:
 
 
 def _save_config(settings: AppSettings, config_path: Path) -> None:
-    """Write settings to config_path, creating parent directories as needed."""
+    """Write settings to config_path, creating parent directories as needed.
+
+    Applies 0o600 permissions (owner read/write only) after writing to protect
+    API keys stored in the config file from being readable by other users.
+    The chmod is applied unconditionally — both on first write and on overwrite —
+    because file creation mode is subject to the process umask.
+    """
     config_path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "providers": {
@@ -167,20 +178,22 @@ def _save_config(settings: AppSettings, config_path: Path) -> None:
         }
     }
     config_path.write_text(json.dumps(data, indent=2))
+    os.chmod(config_path, 0o600)
 
 
 def _apply_to_environ(settings: AppSettings) -> None:
     """Update os.environ to reflect the saved settings.
 
-    Non-empty keys are set; empty keys are removed so downstream
-    `if os.environ.get(...)` checks work correctly.
+    Only providers with a non-empty api_key are updated. Empty api_key means
+    "don't change" — the key was either not included in this save request or
+    was preserved from the existing config. We do not remove env vars here
+    because externally-configured keys (e.g. from a .env file or shell export)
+    must survive a settings save that only updates model selections.
     """
     for name, ps in settings.providers.items():
         env_var = PROVIDER_API_KEY_ENVS.get(name, f"{name.upper()}_API_KEY")
         if ps.api_key:
             os.environ[env_var] = ps.api_key
-        else:
-            os.environ.pop(env_var, None)
 
 
 async def _test_provider_connection(req: TestProviderRequest) -> TestProviderResponse:
@@ -219,7 +232,7 @@ async def _test_provider_connection(req: TestProviderRequest) -> TestProviderRes
             oc.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": "Say hello"}],
-                max_tokens=16,
+                max_completion_tokens=16,
             )
             return TestProviderResponse(success=True, model_used=model)
 
@@ -241,7 +254,7 @@ async def _test_provider_connection(req: TestProviderRequest) -> TestProviderRes
             pc.chat.completions.create(
                 model="sonar",
                 messages=[{"role": "user", "content": "Say hello"}],
-                max_tokens=16,
+                max_completion_tokens=16,
             )
             return TestProviderResponse(success=True, model_used="sonar")
 
@@ -262,7 +275,21 @@ async def _test_provider_connection(req: TestProviderRequest) -> TestProviderRes
             return TestProviderResponse(success=True, model_used="brave-search")
 
     except Exception as exc:  # noqa: BLE001
-        return TestProviderResponse(success=False, error=str(exc))
+        # Log full traceback server-side. Return a sanitized message that
+        # omits internal details but retains enough for the user to act on
+        # (DEC-SEC-006). str(exc) is used here because provider auth errors
+        # (e.g. "AuthenticationError: Invalid API Key") are meaningful to
+        # the user and don't contain sensitive server-side data.
+        logger.warning(
+            "Provider test failed for %s: %s",
+            req.provider,
+            str(exc),
+            exc_info=True,
+        )
+        # Truncate to 200 chars to avoid leaking long stack traces if the
+        # exception message itself is unexpectedly verbose.
+        sanitized = str(exc)[:200]
+        return TestProviderResponse(success=False, error=sanitized)
 
     return TestProviderResponse(success=False, error="Unexpected error")
 
@@ -343,13 +370,23 @@ async def update_settings(settings: AppSettings) -> SettingsResponse:
         except (json.JSONDecodeError, OSError):
             existing = {}
 
-    # Merge: incoming providers overwrite existing ones
+    # Merge: incoming providers overwrite existing ones.
+    # Empty incoming values preserve the existing stored value — the frontend
+    # sends api_key="" when the user is not editing the key (by design), so
+    # we must not clear a previously-saved key when only the model changes.
     existing_providers: dict = existing.get("providers", {})
     for name, ps in settings.providers.items():
+        existing_entry = existing_providers.get(name, {})
         existing_providers[name] = {
-            "api_key": ps.api_key,
-            "default_model": ps.default_model,
-            "research_model": ps.research_model,
+            "api_key": ps.api_key or (
+                existing_entry.get("api_key", "") if isinstance(existing_entry, dict) else ""
+            ),
+            "default_model": ps.default_model or (
+                existing_entry.get("default_model", "") if isinstance(existing_entry, dict) else ""
+            ),
+            "research_model": ps.research_model or (
+                existing_entry.get("research_model", "") if isinstance(existing_entry, dict) else ""
+            ),
         }
 
     merged = AppSettings(
@@ -364,7 +401,11 @@ async def update_settings(settings: AppSettings) -> SettingsResponse:
     )
 
     _save_config(merged, config_path)
-    _apply_to_environ(settings)  # Apply only the keys from this request
+    # Apply only providers where the caller explicitly sent an api_key (even if "").
+    # This ensures: setting a key updates os.environ; clearing a key (sending "")
+    # removes it from os.environ; but providers where no key was sent at all are
+    # left untouched in os.environ (env-var keys remain for the running process).
+    _apply_to_environ(settings)
 
     return _load_settings(config_path)
 

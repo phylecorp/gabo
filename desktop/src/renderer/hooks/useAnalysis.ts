@@ -8,10 +8,17 @@
  *   14 event types from the Python EventBus. The hook owns the WebSocket lifecycle:
  *   connect on startAnalysis, disconnect on unmount. autoReconnect=false because
  *   analysis runs are one-shot and reconnecting produces duplicate/stale events.
+ *
+ * @decision DEC-AUTH-010
+ * @title useAnalysis uses client from ApiContext to include auth token
+ * @status accepted
+ * @rationale SatClient is now constructed with the auth token in ApiProvider.
+ *   useAnalysis reads client from ApiContext rather than constructing its own
+ *   SatClient, ensuring the token flows through automatically. WebSocket URLs
+ *   use client.buildWsUrl() to append ?token=<token>.
  */
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 import { AnalysisWebSocket } from '../api/ws'
 import type { AnalysisRequest, PipelineEventMessage, RunProgress } from '../api/types'
 
@@ -94,20 +101,20 @@ function reducer(state: RunProgress, action: Action): RunProgress {
 }
 
 export function useAnalysis() {
-  const { baseUrl, wsBaseUrl } = useApiContext()
+  const { wsBaseUrl, client } = useApiContext()
   const [progress, dispatch] = useReducer(reducer, initialState)
   const wsRef = useRef<AnalysisWebSocket | null>(null)
 
   const startAnalysis = useCallback(async (request: AnalysisRequest): Promise<string | null> => {
-    if (!baseUrl || !wsBaseUrl) return null
+    if (!client || !wsBaseUrl) return null
 
     dispatch({ type: 'CONNECTING' })
 
-    const client = new SatClient(baseUrl)
     const response = await client.startAnalysis(request)
 
-    // Connect WebSocket
-    const wsUrl = `${wsBaseUrl}/ws/analysis/${response.run_id}`
+    // Connect WebSocket — append auth token as query parameter
+    const rawWsUrl = `${wsBaseUrl}/ws/analysis/${response.run_id}`
+    const wsUrl = client.buildWsUrl(rawWsUrl)
     const ws = new AnalysisWebSocket(wsUrl, false)
     wsRef.current = ws
 
@@ -117,7 +124,7 @@ export function useAnalysis() {
 
     ws.connect()
     return response.run_id
-  }, [baseUrl, wsBaseUrl])
+  }, [client, wsBaseUrl])
 
   // Cleanup on unmount
   useEffect(() => {

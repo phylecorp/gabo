@@ -15,6 +15,16 @@ Challenges to This View (divergent signals and low-confidence findings), Confide
 bar with plain-language narrative), Next Steps, Methods Used (brief per-technique summaries, no
 full content), and Appendix. The template uses result.summary for per-technique narrative;
 rendered_content is preserved in context for potential future use but not rendered in the main body.
+
+@decision DEC-REPORT-005
+@title LLM-generated report as primary path, Jinja2 as fallback
+@status accepted
+@rationale write_llm() sends all structured data (synthesis JSON, full technique artifact JSONs,
+evidence, question) to an LLM provider and saves the generated prose as report.md/report.html.
+The HTML wrapper reuses the same CSS from report.html.j2 for visual consistency. If the LLM
+call fails for any reason (API error, timeout, import error), write_llm() transparently falls
+back to the existing Jinja2 write() path. This ensures reports are always generated even when
+the LLM is unavailable.
 """
 
 from __future__ import annotations
@@ -25,6 +35,10 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sat.providers.base import LLMProvider
 
 import markdown as markdown_lib
 from jinja2 import Environment, FileSystemLoader
@@ -347,3 +361,175 @@ class ReportBuilder:
             paths.append(html_path)
 
         return paths
+
+    def _build_llm_context(self) -> dict:
+        """Build the context dict for the LLM report prompt.
+
+        Returns a dict with:
+            - question: str — the analytic question
+            - synthesis: dict | None — serialized synthesis result
+            - technique_artifacts: list[dict] — each has 'id', 'name', 'data'
+            - evidence: str | None — evidence string from manifest metadata
+        """
+        # Load synthesis result
+        synthesis_data: dict | None = None
+        for artifact in self.manifest.artifacts:
+            if _is_synthesis_artifact(artifact.technique_id) and artifact.json_path:
+                try:
+                    result = self._load_artifact(artifact.json_path)
+                    synthesis_data = result.model_dump()
+                    break
+                except Exception:
+                    logger.debug("Could not load synthesis for LLM context from %s", artifact.json_path)
+
+        # Collect full technique artifact JSONs
+        technique_artifacts: list[dict] = []
+        for artifact in self.manifest.artifacts:
+            if not _is_technique_artifact(artifact.technique_id):
+                continue
+            if not artifact.json_path:
+                continue
+            try:
+                result = self._load_artifact(artifact.json_path)
+                name = self._resolve_technique_name(artifact.technique_id)
+                technique_artifacts.append({
+                    "id": artifact.technique_id,
+                    "name": name,
+                    "data": result.model_dump(),
+                })
+            except Exception:
+                logger.debug("Could not load artifact %s for LLM context", artifact.technique_id)
+
+        return {
+            "question": self.manifest.question,
+            "synthesis": synthesis_data,
+            "technique_artifacts": technique_artifacts,
+            "evidence": None,  # Evidence string not stored in manifest; available at pipeline level
+        }
+
+    async def write_llm(self, provider: "LLMProvider", fmt: str = "both") -> list[Path]:
+        """Generate report using an LLM provider, falling back to Jinja2 on failure.
+
+        Sends the full structured context (synthesis, technique artifact JSONs, question)
+        to the LLM provider and saves the generated prose as report.md and/or report.html.
+        The HTML output wraps the rendered markdown in the same CSS as report.html.j2.
+
+        Args:
+            provider: LLM provider instance with a generate() method.
+            fmt: "markdown", "html", or "both"
+
+        Returns:
+            List of paths to generated files (same contract as write()).
+        """
+        try:
+            from sat.prompts.report import build_prompt
+
+            ctx = self._build_llm_context()
+            system_prompt, messages = build_prompt(ctx)
+
+            result = await provider.generate(
+                system_prompt=system_prompt,
+                messages=messages,
+                max_tokens=4096,
+                temperature=0.4,
+            )
+            report_md = result.text
+
+        except Exception:
+            logger.warning(
+                "LLM report generation failed — falling back to Jinja2 template",
+                exc_info=True,
+            )
+            return self.write(fmt=fmt)
+
+        paths: list[Path] = []
+
+        if fmt in ("markdown", "both"):
+            md_path = self.output_dir / "report.md"
+            md_path.write_text(report_md, encoding="utf-8")
+            paths.append(md_path)
+
+        if fmt in ("html", "both"):
+            html_path = self.output_dir / "report.html"
+            html_content = self._wrap_markdown_as_html(report_md)
+            html_path.write_text(html_content, encoding="utf-8")
+            paths.append(html_path)
+
+        return paths
+
+    def _wrap_markdown_as_html(self, markdown_text: str) -> str:
+        """Convert LLM-generated markdown to a self-contained HTML document.
+
+        Renders markdown to HTML and wraps it in the same CSS as report.html.j2,
+        producing a visually consistent self-contained report file.
+
+        Args:
+            markdown_text: The markdown content to render.
+
+        Returns:
+            A complete HTML document string.
+        """
+        body_html = markdown_lib.markdown(
+            markdown_text,
+            extensions=["tables", "fenced_code"],
+        )
+
+        # Read the CSS block from the existing HTML template (lines between <style> and </style>)
+        template_path = Path(__file__).parent / "templates" / "report.html.j2"
+        css_block = self._extract_css_from_template(template_path)
+
+        question_escaped = self.manifest.question.replace("<", "&lt;").replace(">", "&gt;")
+
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{question_escaped} — Intelligence Assessment</title>
+<style>
+{css_block}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="report-content">
+{body_html}
+</div>
+<div class="footer">
+  <p>Generated by Gabo &mdash; LLM Intelligence Assessment</p>
+</div>
+</div>
+<script>
+window.addEventListener('beforeprint', function() {{
+  document.querySelectorAll('details').forEach(function(d) {{ d.open = true; }});
+}});
+</script>
+</body>
+</html>"""
+
+    @staticmethod
+    def _extract_css_from_template(template_path: Path) -> str:
+        """Extract the CSS content between <style> and </style> from an HTML template.
+
+        Args:
+            template_path: Path to the Jinja2 HTML template file.
+
+        Returns:
+            The raw CSS text (without the <style> tags themselves).
+        """
+        try:
+            content = template_path.read_text(encoding="utf-8")
+            start = content.find("<style>")
+            end = content.find("</style>")
+            if start != -1 and end != -1:
+                return content[start + len("<style>"):end]
+        except Exception:
+            logger.debug("Could not extract CSS from template %s", template_path)
+        # Minimal fallback CSS if template extraction fails
+        return """
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+       font-size: 16px; line-height: 1.7; color: #1f2937; background: #fff; margin: 0; }
+.container { max-width: 54rem; margin: 0 auto; padding: 2rem 1.5rem; }
+h1 { font-size: 2rem; } h2 { font-size: 1.5rem; border-bottom: 2px solid #e5e7eb; }
+p { margin: 0 0 1rem; }
+"""

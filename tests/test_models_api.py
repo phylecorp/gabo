@@ -14,9 +14,11 @@ Covers:
 @decision DEC-MODELS-TEST-001
 @title Tests mock external provider APIs at the HTTP layer only
 @status accepted
-@rationale External LLM and REST APIs (openai.OpenAI, google.generativeai) are
-mocked because they require real API keys and make network calls. Internal cache,
-model lists, and categorization logic are tested directly without mocking.
+@rationale External LLM and REST APIs (openai.OpenAI, httpx.get for Gemini REST)
+are mocked because they require real API keys and make network calls. Internal
+cache, model lists, and categorization logic are tested directly without mocking.
+Gemini tests mock httpx.get (the REST boundary) rather than google.generativeai
+(which is not installed); see DEC-MODELS-003.
 """
 
 from __future__ import annotations
@@ -28,9 +30,9 @@ from fastapi.testclient import TestClient
 
 from sat.api.app import create_app
 
-# @mock-exempt: openai.OpenAI and google.generativeai are external third-party
-# service boundaries requiring real API keys and network access. They cannot be
-# tested without mocking at these external boundaries.
+# @mock-exempt: openai.OpenAI and httpx.get (Gemini REST API) are external
+# third-party service boundaries requiring real API keys and network access.
+# They cannot be tested without mocking at these external boundaries.
 
 
 # ---------------------------------------------------------------------------
@@ -243,52 +245,87 @@ def test_openai_api_failure_returns_fallback(client):
 
 
 # ---------------------------------------------------------------------------
-# Gemini — API-fetched with mocked external SDK
+# Gemini — API-fetched via REST (httpx.get), mocked at the HTTP boundary
 # ---------------------------------------------------------------------------
 
 
-def _make_gemini_model(name: str, supported_methods=None):
-    """Create a mock Gemini model object mimicking google.generativeai Model type."""
-    m = MagicMock()
-    m.name = name
-    m.supported_generation_methods = supported_methods or ["generateContent"]
-    return m
+def _make_gemini_rest_response(models: list[dict]) -> MagicMock:
+    """Create a mock httpx.Response for the Gemini REST /v1beta/models endpoint.
+
+    Each model dict should have at minimum "name" and "supportedGenerationMethods".
+    """
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {"models": models}
+    return mock_resp
 
 
 def test_gemini_uses_api_listing(client):
-    """Gemini uses google.generativeai.list_models() to fetch models."""
+    """Gemini fetches models via the REST API (httpx.get) and categorizes them."""
     fake_models = [
-        _make_gemini_model("models/gemini-2.5-pro"),
-        _make_gemini_model("models/gemini-1.5-flash"),
-        _make_gemini_model("models/gemini-deep-research-pro"),
-        _make_gemini_model("models/text-embedding-004", ["embedContent"]),  # should be filtered
+        {
+            "name": "models/gemini-2.5-pro",
+            "displayName": "Gemini 2.5 Pro",
+            "supportedGenerationMethods": ["generateContent"],
+        },
+        {
+            "name": "models/gemini-1.5-flash",
+            "displayName": "Gemini 1.5 Flash",
+            "supportedGenerationMethods": ["generateContent"],
+        },
+        {
+            "name": "models/gemini-deep-research-pro",
+            "displayName": "Gemini Deep Research Pro",
+            "supportedGenerationMethods": ["generateContent"],
+        },
+        {
+            "name": "models/text-embedding-004",
+            "displayName": "Text Embedding 004",
+            "supportedGenerationMethods": ["embedContent"],  # should be filtered
+        },
     ]
 
-    with patch("sat.api.routes.models.genai") as mock_genai:
-        mock_genai.list_models.return_value = fake_models
-        resp = client.get("/api/config/models/gemini")
+    with patch("sat.api.routes.models.httpx") as mock_httpx:
+        mock_httpx.get.return_value = _make_gemini_rest_response(fake_models)
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "fake-key"}):
+            resp = client.get("/api/config/models/gemini")
 
     assert resp.status_code == 200
     body = resp.json()
     analysis_ids = [m["id"] for m in body["models"]["analysis"]]
     research_ids = [m["id"] for m in body["models"]["research"]]
 
-    # Generative models should appear in analysis (id may strip "models/" prefix)
-    all_analysis_ids_lower = " ".join(analysis_ids).lower()
-    assert "gemini-2.5-pro" in all_analysis_ids_lower or "gemini-2.5-pro" in analysis_ids
-    # deep-research in research
+    # Generative models should appear in analysis
+    assert "gemini-2.5-pro" in analysis_ids
+    # deep-research model goes to research category
     assert any("deep-research" in rid for rid in research_ids)
     # embedding model filtered out
     assert not any("embedding" in aid for aid in analysis_ids)
 
 
 def test_gemini_api_failure_returns_fallback(client):
-    """If Gemini API call fails, returns curated fallback with error field."""
+    """If Gemini REST API call fails, returns curated fallback with error field."""
     import sat.api.routes.models as models_mod
     models_mod._model_cache.clear()
 
-    with patch("sat.api.routes.models.genai") as mock_genai:
-        mock_genai.list_models.side_effect = Exception("API error")
+    with patch("sat.api.routes.models.httpx") as mock_httpx:
+        mock_httpx.get.side_effect = Exception("API error")
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "fake-key"}):
+            resp = client.get("/api/config/models/gemini")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["models"]["analysis"]) > 0
+    assert "error" in body
+    assert body["error"] is not None
+
+
+def test_gemini_no_api_key_returns_fallback(client):
+    """If no Gemini API key is configured, returns curated fallback with error."""
+    import sat.api.routes.models as models_mod
+    models_mod._model_cache.clear()
+
+    with patch("sat.api.routes.models._get_api_key", return_value=None):
         resp = client.get("/api/config/models/gemini")
 
     assert resp.status_code == 200
@@ -296,6 +333,22 @@ def test_gemini_api_failure_returns_fallback(client):
     assert len(body["models"]["analysis"]) > 0
     assert "error" in body
     assert body["error"] is not None
+
+
+def test_gemini_research_fallback_includes_deep_research(client):
+    """The Gemini research fallback list includes the known deep-research model."""
+    import sat.api.routes.models as models_mod
+    models_mod._model_cache.clear()
+
+    with patch("sat.api.routes.models.httpx") as mock_httpx:
+        mock_httpx.get.side_effect = Exception("network error")
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "fake-key"}):
+            resp = client.get("/api/config/models/gemini")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    research_ids = [m["id"] for m in body["models"]["research"]]
+    assert "deep-research-pro-preview-12-2025" in research_ids
 
 
 # ---------------------------------------------------------------------------

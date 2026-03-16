@@ -1,13 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 
 export function useTechniques() {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   return useQuery({
     queryKey: ['techniques'],
-    queryFn: () => new SatClient(baseUrl!).getTechniques(),
-    enabled: !!baseUrl,
+    queryFn: () => client!.getTechniques(),
+    enabled: !!client,
     staleTime: Infinity,
   })
 }

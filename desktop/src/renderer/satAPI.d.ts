@@ -8,10 +8,18 @@
  *   Without a declaration, TypeScript requires `(window as any).satAPI` throughout
  *   the renderer. Adding a proper interface lets callers use window.satAPI directly
  *   with full type checking, and makes the IPC contract explicit.
+ *
+ * @decision DEC-AUTH-007
+ * @title getAuthToken added to SatAPI interface for auth token retrieval
+ * @status accepted
+ * @rationale The renderer needs the auth token to send Authorization headers.
+ *   Declaring it here ensures type-safe access in context.tsx and any component
+ *   that directly calls window.satAPI.getAuthToken().
  */
 
 interface SatAPI {
   getApiPort: () => Promise<number>
+  getAuthToken: () => Promise<string>
   openFileDialog: () => Promise<string[]>
 }
 

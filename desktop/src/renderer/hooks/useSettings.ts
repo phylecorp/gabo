@@ -9,26 +9,25 @@
  */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 import type { AppSettings } from '../api/types'
 
 export function useSettings() {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   return useQuery({
     queryKey: ['settings'],
-    queryFn: () => new SatClient(baseUrl!).getSettings(),
-    enabled: !!baseUrl,
+    queryFn: () => client!.getSettings(),
+    enabled: !!client,
     staleTime: 0, // Always re-fetch on mount — env vars may have changed
   })
 }
 
 export function useUpdateSettings() {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (settings: AppSettings) =>
-      new SatClient(baseUrl!).updateSettings(settings),
+      client!.updateSettings(settings),
     onSuccess: () => {
       // Invalidate both settings and providers so dashboard status strip refreshes
       queryClient.invalidateQueries({ queryKey: ['settings'] })
@@ -38,10 +37,10 @@ export function useUpdateSettings() {
 }
 
 export function useTestProvider() {
-  const { baseUrl } = useApiContext()
+  const { client } = useApiContext()
 
   return useMutation({
     mutationFn: (req: { provider: string; api_key: string; model?: string }) =>
-      new SatClient(baseUrl!).testProvider(req),
+      client!.testProvider(req),
   })
 }

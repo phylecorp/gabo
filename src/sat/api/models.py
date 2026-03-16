@@ -8,22 +8,47 @@ models act as the translation layer — they are what the API exposes and accept
 not the internal config objects. Keeping them separate avoids leaking internal
 implementation details (e.g. PreprocessingConfig, IngestionConfig) into the
 public API surface. The routes translate AnalysisRequest -> AnalysisConfig.
+
+@decision DEC-SEC-005
+@title Input size limits via Pydantic Field constraints on all request models
+@status accepted
+@rationale Unbounded string and list fields allow a client to submit arbitrarily
+large payloads. This ties up LLM token budgets, exhausts server memory, and can
+be used for denial-of-service. Limits are sized to practical maximums:
+- question: 50,000 chars (~12,500 tokens) — enough for very detailed questions
+- evidence: 500,000 chars (~125,000 tokens) — enough for large documents
+- name: 500 chars — human-readable label, no need for more
+- techniques: 20 items — there are only ~12 registered techniques
+- evidence_sources: 100 items — practical maximum for a single analysis run
+- selected_item_ids: 500 items — curated pool items
 """
 
 from __future__ import annotations
+
+from typing import Annotated
 
 from pydantic import BaseModel, Field
 
 from sat.models.evidence import EvidencePool
 
+# Re-usable annotated types for constrained string/list fields
+_Question = Annotated[str, Field(max_length=50_000)]
+_Name = Annotated[str | None, Field(default=None, max_length=500)]
+_Evidence = Annotated[str | None, Field(default=None, max_length=500_000)]
+_Techniques = Annotated[list[str] | None, Field(default=None, max_length=20)]
+_EvidenceSources = Annotated[
+    list[str] | None,
+    Field(default=None, max_length=100, description="File paths or URLs to ingest as evidence"),
+]
+
 
 class AnalysisRequest(BaseModel):
     """Request body for POST /api/analysis."""
 
-    question: str
-    name: str | None = None
-    evidence: str | None = None
-    techniques: list[str] | None = None  # None = auto-select
+    question: _Question
+    name: _Name = None
+    evidence: _Evidence = None
+    techniques: _Techniques = None  # None = auto-select
     output_dir: str = "."
     provider: str = "anthropic"
     model: str | None = None
@@ -34,9 +59,7 @@ class AnalysisRequest(BaseModel):
     adversarial_rounds: int = 1
     report_enabled: bool = True
     report_format: str = "both"
-    evidence_sources: list[str] | None = Field(
-        default=None, description="File paths or URLs to ingest as evidence"
-    )
+    evidence_sources: _EvidenceSources = None
 
 
 class AnalysisResponse(BaseModel):
@@ -97,11 +120,18 @@ class RunSummary(BaseModel):
 
 
 class RunDetail(RunSummary):
-    """Full detail for a single analysis run."""
+    """Full detail for a single analysis run.
+
+    For completed runs, synthesis_content and technique_summaries are inlined
+    so the frontend can render immediately without N+1 artifact fetches.
+    Both fields default to None for in-progress runs or runs without data.
+    """
 
     artifacts: list[dict]
     synthesis_path: str | None = None
     evidence_path: str | None = None
+    synthesis_content: dict | None = None  # Full synthesis JSON, inlined for completed runs
+    technique_summaries: dict[str, str] | None = None  # {technique_id: summary_text}
 
 
 class ProviderSettings(BaseModel):
@@ -153,16 +183,14 @@ class TestProviderResponse(BaseModel):
 class EvidenceGatherRequest(BaseModel):
     """Request body for POST /api/evidence/gather."""
 
-    question: str
-    name: str | None = None
-    evidence: str | None = None
+    question: _Question
+    name: _Name = None
+    evidence: _Evidence = None
     research_enabled: bool = True
     research_mode: str = "multi"
     provider: str = "anthropic"
     model: str | None = None
-    evidence_sources: list[str] | None = Field(
-        default=None, description="File paths or URLs to ingest as evidence"
-    )
+    evidence_sources: _EvidenceSources = None
 
 
 class EvidenceGatherResponse(BaseModel):
@@ -175,15 +203,15 @@ class EvidenceGatherResponse(BaseModel):
 class RenameRunRequest(BaseModel):
     """Request body for PATCH /api/runs/{run_id}."""
 
-    name: str
+    name: Annotated[str, Field(max_length=500)]
 
 
 class CuratedAnalysisRequest(BaseModel):
     """Request body for POST /api/evidence/{session_id}/analyze."""
 
-    selected_item_ids: list[str]
-    name: str | None = None
-    techniques: list[str] | None = None
+    selected_item_ids: Annotated[list[str], Field(max_length=500)]
+    name: _Name = None
+    techniques: _Techniques = None
     provider: str = "anthropic"
     model: str | None = None
     adversarial_enabled: bool = False
@@ -191,9 +219,7 @@ class CuratedAnalysisRequest(BaseModel):
     adversarial_rounds: int = 1
     report_enabled: bool = True
     report_format: str = "both"
-    evidence_sources: list[str] | None = Field(
-        default=None, description="File paths or URLs to ingest as evidence"
-    )
+    evidence_sources: _EvidenceSources = None
 
 
 class PoolRequest(BaseModel):
@@ -205,12 +231,10 @@ class PoolRequest(BaseModel):
     before triggering the full analysis pipeline.
     """
 
-    question: str
-    name: str | None = None
-    evidence: str | None = None  # raw text entered by user; split into paragraph items
-    evidence_sources: list[str] | None = Field(
-        default=None, description="File paths or URLs to ingest as evidence documents"
-    )
+    question: _Question
+    name: _Name = None
+    evidence: _Evidence = None  # raw text entered by user; split into paragraph items
+    evidence_sources: _EvidenceSources = None
 
 
 class PoolResponse(BaseModel):

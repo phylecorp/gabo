@@ -6,12 +6,23 @@
  *   user machines. Health polling (500ms interval, 30s timeout) is more reliable
  *   than stdout parsing since uvicorn startup messages can vary across versions.
  *   SIGTERM on shutdown is preferred over SIGKILL for graceful FastAPI shutdown.
+ *
+ * @decision DEC-AUTH-005
+ * @title Auth token captured from sidecar stdout before health-poll completes
+ * @status accepted
+ * @rationale The Python backend prints "SAT_AUTH_TOKEN=<token>" on startup
+ *   (before uvicorn begins). Electron captures it by watching stdout data events
+ *   before waitForHealth resolves. By the time waitForHealth returns, the token
+ *   is guaranteed to be available (the line is printed before uvicorn starts
+ *   accepting connections). getSidecarToken() returns the captured token or
+ *   empty string if auth is disabled / not yet received.
  */
 import { spawn, ChildProcess } from 'child_process'
 import * as net from 'net'
 
 let sidecarProcess: ChildProcess | null = null
 let sidecarPort: number = 0
+let sidecarToken: string = ''
 
 async function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -44,6 +55,7 @@ async function waitForHealth(port: number, timeoutMs: number = 30000): Promise<v
 
 export async function startSidecar(): Promise<void> {
   sidecarPort = await findFreePort()
+  sidecarToken = ''
 
   sidecarProcess = spawn('python', ['-m', 'sat.api.main', '--port', String(sidecarPort)], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -51,7 +63,17 @@ export async function startSidecar(): Promise<void> {
   })
 
   sidecarProcess.stdout?.on('data', (data: Buffer) => {
-    console.log(`[sidecar] ${data.toString().trim()}`)
+    const text = data.toString()
+    // Parse SAT_AUTH_TOKEN=<token> from stdout before uvicorn logs begin
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('SAT_AUTH_TOKEN=')) {
+        sidecarToken = trimmed.slice('SAT_AUTH_TOKEN='.length)
+        console.log('[sidecar] auth token received')
+      } else if (trimmed) {
+        console.log(`[sidecar] ${trimmed}`)
+      }
+    }
   })
 
   sidecarProcess.stderr?.on('data', (data: Buffer) => {
@@ -76,4 +98,8 @@ export async function stopSidecar(): Promise<void> {
 
 export function getSidecarPort(): number {
   return sidecarPort
+}
+
+export function getSidecarToken(): string {
+  return sidecarToken
 }

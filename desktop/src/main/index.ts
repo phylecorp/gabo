@@ -6,10 +6,20 @@
  *   Dev mode skips sidecar when DEV_API_PORT is set, allowing `uvicorn` to run
  *   separately. Dev mode detection uses app.isPackaged (reliable) rather than
  *   NODE_ENV (can be overridden by build tooling).
+ *
+ * @decision DEC-AUTH-006
+ * @title get-auth-token IPC handler exposes token to renderer via context bridge
+ * @status accepted
+ * @rationale The renderer cannot access Node.js modules directly due to
+ *   contextIsolation. IPC is the correct boundary: renderer calls 'get-auth-token'
+ *   via window.satAPI.getAuthToken(), main process returns the token captured
+ *   from sidecar stdout. In dev mode (DEV_API_PORT set), an empty string is
+ *   returned — the frontend falls back to unauthenticated mode which works
+ *   when the dev server has SAT_DISABLE_AUTH=1.
  */
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
-import { startSidecar, stopSidecar, getSidecarPort } from './sidecar'
+import { startSidecar, stopSidecar, getSidecarPort, getSidecarToken } from './sidecar'
 
 const isDev = !app.isPackaged
 
@@ -58,6 +68,13 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('get-api-port', () => {
     return devPort ? parseInt(devPort) : getSidecarPort()
+  })
+
+  // Expose auth token to renderer via IPC (DEC-AUTH-006).
+  // In dev mode (devPort set), returns empty string — dev server must have
+  // SAT_DISABLE_AUTH=1. In production, returns the token from sidecar stdout.
+  ipcMain.handle('get-auth-token', () => {
+    return devPort ? '' : getSidecarToken()
   })
 
   ipcMain.handle('dialog:open-files', async () => {

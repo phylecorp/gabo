@@ -8,12 +8,22 @@
  *   used (not src) to avoid navigation away from the app. A print button delegates to
  *   the iframe's contentWindow.print() for proper page formatting. The dark overlay
  *   container maintains visual consistency with the app shell.
+ *
+ * @decision DEC-SECURITY-IFRAME-001
+ * @title iframe sandbox: allow-same-origin retained, allow-popups removed
+ * @status accepted
+ * @rationale Security hardening tightens the iframe sandbox to the minimum required.
+ *   allow-popups is removed — reports have no legitimate need to open new browser windows.
+ *   allow-same-origin is retained because handlePrint() accesses contentWindow.print()
+ *   via the DOM API: without allow-same-origin, srcdoc frames get a null origin and the
+ *   cross-origin security model blocks contentWindow access entirely, breaking printing.
+ *   allow-scripts is intentionally absent — the report HTML is generated server-side
+ *   with no embedded JS, so script execution is never needed.
  */
 import { useParams, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useRef } from 'react'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 import IntelCard from '../components/common/IntelCard'
 import ErrorState from '../components/common/ErrorState'
 
@@ -28,7 +38,7 @@ function LoadingState() {
 export default function ReportView() {
   const { runId } = useParams<{ runId: string }>()
   const navigate = useNavigate()
-  const { baseUrl } = useApiContext()
+  const { baseUrl, client } = useApiContext()
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
   const {
@@ -38,11 +48,11 @@ export default function ReportView() {
     refetch,
   } = useQuery({
     queryKey: ['report', runId],
-    queryFn: () => new SatClient(baseUrl!).getRunReport(runId!, 'html'),
+    queryFn: () => client!.getRunReport(runId!, 'html'),
     enabled: !!baseUrl && !!runId,
   })
 
-  const client = baseUrl ? new SatClient(baseUrl) : null
+  
 
   function handlePrint() {
     if (iframeRef.current?.contentWindow) {
@@ -122,7 +132,7 @@ export default function ReportView() {
           <iframe
             ref={iframeRef}
             className="report-iframe"
-            sandbox="allow-same-origin allow-popups"
+            sandbox="allow-same-origin"
             title={`Analysis Report — ${runId}`}
             srcDoc={reportHtml}
           />

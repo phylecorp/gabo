@@ -8,10 +8,22 @@
  *   so the user gets immediate feedback without saving first. Save is global —
  *   one PUT covers all providers to keep the backend interaction simple.
  *   Status indicators mirror the dashboard provider strip for visual consistency.
+ *
+ * @decision DEC-DESKTOP-SETTINGS-PAGE-002
+ * @title Model dropdowns replace free-text inputs, with graceful text fallback
+ * @status accepted
+ * @rationale Dropdowns populated from GET /api/config/models/{provider} prevent
+ *   typos and surface all available models. When the fetch fails (no key, network
+ *   error) the component falls back to the original free-text <input> so users
+ *   can still type a custom model ID. Research model dropdowns are shown only for
+ *   providers with non-empty research model lists (Perplexity, OpenAI, Gemini).
+ *   Anthropic has no research provider so its research list is always empty.
+ *   Brave has no model concept at all and is hidden via HIDE_MODEL_PROVIDERS.
  */
 import { useState, type ChangeEvent } from 'react'
 import { useSettings, useUpdateSettings, useTestProvider } from '../hooks/useSettings'
-import type { ProviderSettingsResponse, TestProviderResponse } from '../api/types'
+import { useModels } from '../hooks/useModels'
+import type { ProviderSettingsResponse, TestProviderResponse, ModelInfo } from '../api/types'
 import ErrorState from '../components/common/ErrorState'
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -41,12 +53,13 @@ const HIDE_MODEL_PROVIDERS = new Set(['brave'])
 interface ProviderDraft {
   api_key: string
   default_model: string
+  research_model: string
   editing_key: boolean  // true while the user is actively entering a new key
   show_key: boolean     // show the raw input value while typing
 }
 
 function makeInitialDraft(): ProviderDraft {
-  return { api_key: '', default_model: '', editing_key: false, show_key: false }
+  return { api_key: '', default_model: '', research_model: '', editing_key: false, show_key: false }
 }
 
 interface TestState {
@@ -68,7 +81,20 @@ export default function Settings() {
   const providers = settings?.providers ?? {}
 
   function getDraft(name: string): ProviderDraft {
-    return drafts[name] ?? makeInitialDraft()
+    const stored = drafts[name]
+    if (stored) return stored
+    // Initialize from server info if available
+    const serverInfo = providers[name]
+    if (serverInfo) {
+      return {
+        api_key: '',
+        default_model: serverInfo.default_model ?? '',
+        research_model: serverInfo.research_model ?? '',
+        editing_key: false,
+        show_key: false,
+      }
+    }
+    return makeInitialDraft()
   }
 
   function setDraft(name: string, patch: Partial<ProviderDraft>) {
@@ -92,6 +118,10 @@ export default function Settings() {
 
   function handleModelChange(name: string, value: string) {
     setDraft(name, { default_model: value })
+  }
+
+  function handleResearchModelChange(name: string, value: string) {
+    setDraft(name, { research_model: value })
   }
 
   function handleRemoveKey(name: string) {
@@ -136,7 +166,7 @@ export default function Settings() {
     setSaveError(null)
 
     // Build the payload: include every provider in drafts
-    const providerPayload: Record<string, { api_key: string; default_model: string }> = {}
+    const providerPayload: Record<string, { api_key: string; default_model: string; research_model?: string }> = {}
 
     for (const name of Object.keys(providers)) {
       const draft = getDraft(name)
@@ -147,10 +177,12 @@ export default function Settings() {
       // (backend will preserve existing config file entry)
       const apiKey = draft.editing_key ? draft.api_key : ''
       const model = draft.default_model || serverInfo?.default_model || ''
+      const researchModel = draft.research_model || serverInfo?.research_model || ''
 
       providerPayload[name] = {
         api_key: apiKey,
         default_model: model,
+        research_model: researchModel,
       }
     }
 
@@ -211,6 +243,7 @@ export default function Settings() {
             onCancelEditKey={() => handleCancelEditKey(name)}
             onKeyChange={(v) => handleKeyChange(name, v)}
             onModelChange={(v) => handleModelChange(name, v)}
+            onResearchModelChange={(v) => handleResearchModelChange(name, v)}
             onRemoveKey={() => handleRemoveKey(name)}
             onTestProvider={() => handleTestProvider(name)}
             onToggleShowKey={() => setDraft(name, { show_key: !getDraft(name).show_key })}
@@ -258,6 +291,7 @@ interface ProviderCardProps {
   onCancelEditKey: () => void
   onKeyChange: (value: string) => void
   onModelChange: (value: string) => void
+  onResearchModelChange: (value: string) => void
   onRemoveKey: () => void
   onTestProvider: () => void
   onToggleShowKey: () => void
@@ -275,12 +309,28 @@ function ProviderCard({
   onCancelEditKey,
   onKeyChange,
   onModelChange,
+  onResearchModelChange,
   onRemoveKey,
   onTestProvider,
   onToggleShowKey,
 }: ProviderCardProps) {
   const isConnected = info.has_api_key
   const isEditingKey = draft.editing_key
+
+  // Fetch models for this provider. Always fetch when provider has a key or
+  // is being configured, so dropdowns are ready when the user opens the card.
+  const { models, isLoading: modelsLoading, error: modelsError } = useModels(
+    name,
+    !HIDE_MODEL_PROVIDERS.has(name), // skip brave — no model concept
+  )
+
+  const hasAnalysisModels = models.analysis.length > 0
+  const hasResearchModels = models.research.length > 0
+
+  // Use dropdown when model list is available; fall back to text input on error
+  // or when list is still loading and we have no cached data.
+  const useAnalysisDropdown = hasAnalysisModels && !modelsError
+  const useResearchDropdown = hasResearchModels && !modelsError
 
   return (
     <div className="settings-provider-card">
@@ -375,21 +425,53 @@ function ProviderCard({
         )}
       </div>
 
-      {/* Default model section — hidden for providers without a model concept (e.g. Brave Search) */}
+      {/* Analysis model section — hidden for providers without a model concept (e.g. Brave Search) */}
       {!hideModel && (
         <div className="form-section form-section-spaced">
-          <label className="form-label" htmlFor={`model-${name}`}>Default Model</label>
-          <input
-            id={`model-${name}`}
-            type="text"
-            className="model-override-input"
-            value={draft.default_model}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => onModelChange(e.target.value)}
-            placeholder={info.default_model || modelPlaceholder}
+          <label className="form-label" htmlFor={`model-${name}`}>
+            {hasResearchModels ? 'Analysis Model' : 'Default Model'}
+          </label>
+          {useAnalysisDropdown ? (
+            <ModelSelect
+              id={`model-${name}`}
+              models={models.analysis}
+              value={draft.default_model}
+              placeholder={info.default_model || modelPlaceholder}
+              onChange={onModelChange}
+              loading={modelsLoading && !hasAnalysisModels}
+            />
+          ) : (
+            <input
+              id={`model-${name}`}
+              type="text"
+              className="model-override-input"
+              value={draft.default_model}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => onModelChange(e.target.value)}
+              placeholder={info.default_model || modelPlaceholder}
+            />
+          )}
+          {!useAnalysisDropdown && (
+            <span className="form-label-hint text-xs">
+              Leave blank to use the built-in default ({modelPlaceholder})
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Research model section — shown only for providers with research models */}
+      {!hideModel && useResearchDropdown && (
+        <div className="form-section form-section-spaced">
+          <label className="form-label" htmlFor={`research-model-${name}`}>
+            Research Model
+          </label>
+          <ModelSelect
+            id={`research-model-${name}`}
+            models={models.research}
+            value={draft.research_model}
+            placeholder={info.research_model || ''}
+            onChange={onResearchModelChange}
+            loading={modelsLoading && !hasResearchModels}
           />
-          <span className="form-label-hint text-xs">
-            Leave blank to use the built-in default ({modelPlaceholder})
-          </span>
         </div>
       )}
 
@@ -402,5 +484,59 @@ function ProviderCard({
         </div>
       )}
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ModelSelect
+// ---------------------------------------------------------------------------
+
+interface ModelSelectProps {
+  id: string
+  models: ModelInfo[]
+  value: string
+  placeholder: string
+  onChange: (value: string) => void
+  loading?: boolean
+}
+
+/**
+ * Dropdown select for choosing a model from a list fetched from the backend.
+ *
+ * When value is empty, the first option shown is a prompt to "select a model"
+ * or "(default: <id>)" to make it clear what happens when the field is left
+ * blank. This mirrors the text input placeholder behavior.
+ */
+function ModelSelect({ id, models, value, placeholder, onChange, loading }: ModelSelectProps) {
+  if (loading) {
+    return (
+      <select id={id} className="model-override-input" disabled>
+        <option>Loading models...</option>
+      </select>
+    )
+  }
+
+  // Find the default model to show in the empty-selection prompt
+  const defaultModel = models.find(m => m.default)
+  const emptyLabel = placeholder
+    ? `(default: ${placeholder})`
+    : defaultModel
+      ? `(default: ${defaultModel.id})`
+      : 'Select a model'
+
+  return (
+    <select
+      id={id}
+      className="model-override-input"
+      value={value}
+      onChange={(e: ChangeEvent<HTMLSelectElement>) => onChange(e.target.value)}
+    >
+      <option value="">{emptyLabel}</option>
+      {models.map(m => (
+        <option key={m.id} value={m.id}>
+          {m.name}{m.default ? ' (default)' : ''}
+        </option>
+      ))}
+    </select>
   )
 }

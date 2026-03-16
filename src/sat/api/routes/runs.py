@@ -62,13 +62,15 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import shutil
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
+from sat.api.auth import verify_token
 from sat.api.models import ConcurrencyStatusResponse, RenameRunRequest, RunDetail, RunSummary
 from sat.api.run_manager import RunManager
 from sat.models.base import ArtifactManifest
@@ -93,8 +95,93 @@ def _manifest_to_summary(manifest: ArtifactManifest, status: str = "completed") 
     )
 
 
-def _manifest_to_detail(manifest: ArtifactManifest, status: str = "completed") -> RunDetail:
-    """Convert an ArtifactManifest to a RunDetail for the API response."""
+def _read_bundled_data(
+    manifest: ArtifactManifest,
+    output_dir: Path,
+) -> tuple[dict | None, dict[str, str] | None]:
+    """Read synthesis content and technique summaries from disk for bundling.
+
+    Returns (synthesis_content, technique_summaries). Either can be None if
+    the corresponding files are absent or unreadable.
+
+    @decision DEC-API-011
+    @title Bundle synthesis + technique summaries into GET /api/runs/{run_id}
+    @status accepted
+    @rationale The frontend previously made N+1 requests on every RunDetail load:
+      one GET for synthesis JSON and one per technique for its summary. This
+      caused a visible "Loading..." flash even for completed runs. Inlining the
+      data into the initial RunDetail response eliminates those round-trips.
+      We apply the same DEC-API-008 prefix-stripping logic used by the artifact
+      endpoints to resolve manifest-relative paths. Missing files are silently
+      skipped with a debug log — partial results are better than a 500 error.
+    """
+    synthesis_content: dict | None = None
+    if manifest.synthesis_path:
+        stripped = _strip_run_dir_prefix(manifest.synthesis_path, output_dir)
+        # Use os.path.realpath to resolve symlinks before the prefix check (DEC-SEC-011)
+        real_output = os.path.realpath(output_dir)
+        synth_file = Path(os.path.realpath(output_dir / stripped))
+        if str(synth_file).startswith(real_output):
+            # synthesis_path may point to .md; try the .json variant too
+            if not synth_file.exists() and synth_file.suffix == ".md":
+                synth_file = synth_file.with_suffix(".json")
+            if synth_file.exists():
+                try:
+                    synthesis_content = json.loads(synth_file.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    logger.debug("Failed to read synthesis file %s: %s", synth_file, exc)
+
+    technique_summaries: dict[str, str] | None = None
+    artifacts_with_json = [a for a in manifest.artifacts if a.json_path]
+    if artifacts_with_json:
+        summaries: dict[str, str] = {}
+        real_output = os.path.realpath(output_dir)
+        for artifact in artifacts_with_json:
+            if not artifact.json_path:
+                continue
+            stripped = _strip_run_dir_prefix(artifact.json_path, output_dir)
+            art_file = Path(os.path.realpath(output_dir / stripped))
+            if not str(art_file).startswith(real_output):
+                continue
+            if not art_file.exists():
+                logger.debug(
+                    "Artifact file not found for bundling (technique=%s): %s",
+                    artifact.technique_id,
+                    art_file,
+                )
+                continue
+            try:
+                data = json.loads(art_file.read_text(encoding="utf-8"))
+                summary = data.get("summary")
+                if summary and isinstance(summary, str):
+                    summaries[artifact.technique_id] = summary
+            except Exception as exc:
+                logger.debug(
+                    "Failed to read artifact for bundling (technique=%s): %s",
+                    artifact.technique_id,
+                    exc,
+                )
+        technique_summaries = summaries if summaries else None
+
+    return synthesis_content, technique_summaries
+
+
+def _manifest_to_detail(
+    manifest: ArtifactManifest,
+    status: str = "completed",
+    output_dir: Path | None = None,
+) -> RunDetail:
+    """Convert an ArtifactManifest to a RunDetail for the API response.
+
+    When *output_dir* is provided and the run is completed, synthesis_content
+    and technique_summaries are populated by reading the artifact files from
+    disk, eliminating N+1 frontend fetches (DEC-API-011).
+    """
+    synthesis_content: dict | None = None
+    technique_summaries: dict[str, str] | None = None
+    if output_dir is not None and status == "completed":
+        synthesis_content, technique_summaries = _read_bundled_data(manifest, output_dir)
+
     return RunDetail(
         run_id=manifest.run_id,
         question=manifest.question,
@@ -110,6 +197,8 @@ def _manifest_to_detail(manifest: ArtifactManifest, status: str = "completed") -
         artifacts=[a.model_dump(mode="json") for a in manifest.artifacts],
         synthesis_path=manifest.synthesis_path,
         evidence_path=manifest.evidence_path,
+        synthesis_content=synthesis_content,
+        technique_summaries=technique_summaries,
     )
 
 
@@ -167,7 +256,7 @@ def _find_output_dir(manager: RunManager, run_id: str, search_dir: Path) -> Path
 
 def create_runs_router(manager: RunManager) -> APIRouter:
     """Return the runs router wired to *manager*."""
-    router = APIRouter()
+    router = APIRouter(dependencies=[Depends(verify_token)])
 
     @router.get("/api/runs", response_model=list[RunSummary])
     async def list_runs(
@@ -235,14 +324,19 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         active_run = manager.get_run(run_id)
         if active_run:
             if active_run.output_dir:
-                manifest_path = Path(active_run.output_dir) / "manifest.json"
+                active_output_dir = Path(active_run.output_dir)
+                manifest_path = active_output_dir / "manifest.json"
                 if manifest_path.exists():
                     try:
                         data = json.loads(manifest_path.read_text(encoding="utf-8"))
                         manifest = ArtifactManifest.model_validate(data)
-                        return _manifest_to_detail(manifest, status=active_run.status)
-                    except Exception:
-                        pass
+                        return _manifest_to_detail(
+                            manifest,
+                            status=active_run.status,
+                            output_dir=active_output_dir,
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to read manifest for run %s: %s", run_id, exc)
             # Return partial detail for in-flight or partially-completed run
             return RunDetail(
                 run_id=active_run.run_id,
@@ -262,12 +356,19 @@ def create_runs_router(manager: RunManager) -> APIRouter:
                 synthesis_path=None,
             )
 
-        # Fall back to filesystem scan
-        fs_manifests = _scan_manifests(search_dir)
-        manifest = fs_manifests.get(run_id)
-        if not manifest:
+        # Fall back to filesystem scan — locate the output dir so bundled data
+        # (synthesis_content, technique_summaries) can be populated (DEC-API-011).
+        output_dir = _find_output_dir(manager, run_id, search_dir)
+        if output_dir is None:
             raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found")
-        return _manifest_to_detail(manifest)
+        manifest_path = output_dir / "manifest.json"
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = ArtifactManifest.model_validate(data)
+        except Exception as exc:
+            logger.warning("Failed to read manifest for run %s: %s", run_id, exc)
+            raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found") from exc
+        return _manifest_to_detail(manifest, output_dir=output_dir)
 
     @router.get("/api/runs/{run_id}/report")
     async def get_run_report(
@@ -358,10 +459,12 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         # Strip leading sat-{run_id}/ prefix to avoid double-nesting (DEC-API-008)
         path = _strip_run_dir_prefix(path, output_dir)
 
-        # Resolve both paths and verify the artifact stays inside the output dir
-        resolved_output = output_dir.resolve()
-        artifact_path = (output_dir / path).resolve()
-        if not str(artifact_path).startswith(str(resolved_output) + "/") and artifact_path != resolved_output:
+        # Use os.path.realpath (not just Path.resolve) to resolve symlinks before
+        # the prefix check — this prevents symlink-based traversal bypasses where
+        # a symlink inside the run dir points to a file outside it (DEC-SEC-011).
+        real_output = os.path.realpath(output_dir)
+        artifact_path = Path(os.path.realpath(output_dir / path))
+        if not str(artifact_path).startswith(real_output + os.sep) and str(artifact_path) != real_output:
             raise HTTPException(status_code=400, detail="Path traversal detected")
 
         if not artifact_path.exists():
@@ -426,10 +529,11 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         # Strip leading sat-{run_id}/ prefix to avoid double-nesting (DEC-API-008)
         path = _strip_run_dir_prefix(path, output_dir)
 
-        # Path traversal protection — same pattern as the /artifact endpoint
-        resolved_output = output_dir.resolve()
-        file_path = (output_dir / path).resolve()
-        if not str(file_path).startswith(str(resolved_output) + "/") and file_path != resolved_output:
+        # Use os.path.realpath to resolve symlinks before the prefix check —
+        # prevents symlink-based traversal bypasses (DEC-SEC-011).
+        real_output = os.path.realpath(output_dir)
+        file_path = Path(os.path.realpath(output_dir / path))
+        if not str(file_path).startswith(real_output + os.sep) and str(file_path) != real_output:
             raise HTTPException(status_code=400, detail="Path traversal not allowed")
 
         if not file_path.exists():

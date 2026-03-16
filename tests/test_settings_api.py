@@ -300,8 +300,14 @@ def test_put_settings_updates_os_environ(client, tmp_path):
         os.environ.pop("OPENAI_API_KEY", None)
 
 
-def test_put_settings_empty_key_removes_from_environ(client, tmp_path):
-    """Saving an empty API key removes it from os.environ."""
+def test_put_settings_empty_key_does_not_remove_env_var(client, tmp_path):
+    """Saving with empty api_key preserves existing env var — empty means 'don't change'.
+
+    The frontend sends api_key="" when the user is not editing the key field.
+    This must not be interpreted as 'clear the key'; it means 'preserve whatever
+    is already stored'. An externally-configured env var must survive a settings
+    save that only updates the model.
+    """
     import sat.api.routes.config as config_mod
     config_path = tmp_path / "config.json"
     orig = config_mod._get_config_path
@@ -310,13 +316,14 @@ def test_put_settings_empty_key_removes_from_environ(client, tmp_path):
     os.environ["GEMINI_API_KEY"] = "existing-gemini-key"
     payload = {
         "providers": {
-            "gemini": {"api_key": "", "default_model": ""},
+            "gemini": {"api_key": "", "default_model": "gemini-2.0-flash"},
         }
     }
     try:
         resp = client.put("/api/config/settings", json=payload)
         assert resp.status_code == 200
-        assert os.environ.get("GEMINI_API_KEY") is None
+        # Env var must NOT be removed — empty api_key means "don't change"
+        assert os.environ.get("GEMINI_API_KEY") == "existing-gemini-key"
     finally:
         config_mod._get_config_path = orig
 
@@ -621,3 +628,221 @@ def test_try_resolve_api_key_from_config_file(tmp_path):
             config_mod._get_sat_config_path = orig
         else:
             del config_mod._get_sat_config_path
+
+
+# ---------------------------------------------------------------------------
+# Bug 1: Model selection persists when API key comes from env var
+# ---------------------------------------------------------------------------
+
+
+def test_model_persists_when_key_from_env_var(tmp_path):
+    """Saved model must be returned even when the API key comes from env var.
+
+    Bug: _load_settings() only used file_model when key source was config_file.
+    When source was environment, it fell back to DEFAULT_MODELS, losing the saved model.
+    Fix: model resolution is independent of key source.
+    """
+    from sat.api.routes.config import _load_settings
+    from sat.config import DEFAULT_MODELS
+
+    # Config file has a saved model but no API key (key comes from env)
+    config_path = write_config(tmp_path, {
+        "providers": {
+            "anthropic": {"api_key": "", "default_model": "claude-3-5-haiku-20241022"}
+        }
+    })
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-from-env-testkey1234"
+    try:
+        settings_resp = _load_settings(config_path)
+        anthropic = settings_resp.providers["anthropic"]
+        assert anthropic.source == "environment"
+        # Model must be the saved one, NOT the DEFAULT_MODELS fallback
+        assert anthropic.default_model == "claude-3-5-haiku-20241022"
+        assert anthropic.default_model != DEFAULT_MODELS.get("anthropic", "")
+    finally:
+        del os.environ["ANTHROPIC_API_KEY"]
+
+
+def test_model_persists_when_no_key_configured(tmp_path):
+    """Saved model must be returned even when there is no API key at all.
+
+    When source is 'default', _load_settings still had the file_model available
+    and should use it (file_model or DEFAULT_MODELS fallback).
+    """
+    from sat.api.routes.config import _load_settings
+
+    # Config file has a model saved but no API key anywhere
+    config_path = write_config(tmp_path, {
+        "providers": {
+            "openai": {"api_key": "", "default_model": "gpt-4o-mini"}
+        }
+    })
+    settings_resp = _load_settings(config_path)
+    openai_info = settings_resp.providers["openai"]
+    assert openai_info.source == "default"
+    assert openai_info.default_model == "gpt-4o-mini"
+
+
+def test_research_model_persists_when_key_from_env_var(tmp_path):
+    """Saved research_model must also be returned when key is from env var."""
+    from sat.api.routes.config import _load_settings
+
+    config_path = write_config(tmp_path, {
+        "providers": {
+            "openai": {
+                "api_key": "",
+                "default_model": "gpt-4o",
+                "research_model": "o1-preview",
+            }
+        }
+    })
+    os.environ["OPENAI_API_KEY"] = "sk-openai-from-env-testkey1234"
+    try:
+        settings_resp = _load_settings(config_path)
+        openai_info = settings_resp.providers["openai"]
+        assert openai_info.source == "environment"
+        assert openai_info.default_model == "gpt-4o"
+        assert openai_info.research_model == "o1-preview"
+    finally:
+        del os.environ["OPENAI_API_KEY"]
+
+
+# ---------------------------------------------------------------------------
+# Bug 2: Saving settings must not clear existing API keys when not editing them
+# ---------------------------------------------------------------------------
+
+
+def test_put_settings_preserves_existing_api_key_when_empty_sent(client, tmp_path):
+    """PUT with empty api_key must not clear an existing key in config.json.
+
+    Bug: update_settings replaced the entire provider entry with the incoming
+    values, so sending api_key="" cleared the saved key.
+    Fix: empty incoming api_key keeps the existing stored key.
+    """
+    import sat.api.routes.config as config_mod
+
+    # Pre-populate config with an existing key
+    config_path = write_config(tmp_path, {
+        "providers": {
+            "anthropic": {
+                "api_key": "sk-ant-existingkey1234",
+                "default_model": "claude-opus-4-6",
+                "research_model": "",
+            }
+        }
+    })
+    orig = config_mod._get_config_path
+    config_mod._get_config_path = lambda: config_path
+
+    # Save only the model; api_key="" means "don't change the key"
+    payload = {
+        "providers": {
+            "anthropic": {
+                "api_key": "",
+                "default_model": "claude-3-5-haiku-20241022",
+                "research_model": "",
+            }
+        }
+    }
+    try:
+        resp = client.put("/api/config/settings", json=payload)
+        assert resp.status_code == 200
+        saved = json.loads(config_path.read_text())
+        # Existing key must be preserved
+        assert saved["providers"]["anthropic"]["api_key"] == "sk-ant-existingkey1234"
+        # Model update must be reflected
+        assert saved["providers"]["anthropic"]["default_model"] == "claude-3-5-haiku-20241022"
+    finally:
+        config_mod._get_config_path = orig
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+def test_put_settings_preserves_existing_model_when_empty_sent(client, tmp_path):
+    """PUT with empty default_model must not clear an existing saved model.
+
+    Symmetric to the api_key preservation test: empty values keep existing.
+    """
+    import sat.api.routes.config as config_mod
+
+    config_path = write_config(tmp_path, {
+        "providers": {
+            "openai": {
+                "api_key": "sk-openai-existingkey1234",
+                "default_model": "gpt-4o-mini",
+                "research_model": "o1-preview",
+            }
+        }
+    })
+    orig = config_mod._get_config_path
+    config_mod._get_config_path = lambda: config_path
+
+    # Send new api_key but leave model empty
+    payload = {
+        "providers": {
+            "openai": {
+                "api_key": "sk-openai-newkey99999999",
+                "default_model": "",
+                "research_model": "",
+            }
+        }
+    }
+    try:
+        resp = client.put("/api/config/settings", json=payload)
+        assert resp.status_code == 200
+        saved = json.loads(config_path.read_text())
+        assert saved["providers"]["openai"]["api_key"] == "sk-openai-newkey99999999"
+        # Existing model must be preserved
+        assert saved["providers"]["openai"]["default_model"] == "gpt-4o-mini"
+        assert saved["providers"]["openai"]["research_model"] == "o1-preview"
+    finally:
+        config_mod._get_config_path = orig
+        os.environ.pop("OPENAI_API_KEY", None)
+
+
+# ---------------------------------------------------------------------------
+# Bug 1+2 combined: Round-trip save model → load → get saved model
+# ---------------------------------------------------------------------------
+
+
+def test_round_trip_save_model_then_load_returns_saved_model(client, tmp_path):
+    """Full round-trip: save a model via PUT, then GET and verify it comes back.
+
+    This is the user-visible symptom: save a model in Settings, reload the
+    page, and the model reverts to default. Both bugs compound here:
+    - Bug 1: _load_settings ignores file_model when key is from env
+    - Bug 2: PUT clears the key, so on reload there's no key at all
+    """
+    import sat.api.routes.config as config_mod
+
+    config_path = tmp_path / "config.json"
+    orig = config_mod._get_config_path
+    config_mod._get_config_path = lambda: config_path
+
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-envkey-roundtrip123"
+    try:
+        # Step 1: Save a non-default model (api_key="" because key is from env)
+        put_payload = {
+            "providers": {
+                "anthropic": {
+                    "api_key": "",
+                    "default_model": "claude-3-5-haiku-20241022",
+                    "research_model": "",
+                }
+            }
+        }
+        put_resp = client.put("/api/config/settings", json=put_payload)
+        assert put_resp.status_code == 200
+
+        # Step 2: Reload settings (simulates page refresh)
+        get_resp = client.get("/api/config/settings")
+        assert get_resp.status_code == 200
+        body = get_resp.json()
+        anthropic = body["providers"]["anthropic"]
+
+        # The saved model must survive the round-trip
+        assert anthropic["default_model"] == "claude-3-5-haiku-20241022"
+        # Key should still be detected (from env var)
+        assert anthropic["has_api_key"] is True
+    finally:
+        config_mod._get_config_path = orig
+        os.environ.pop("ANTHROPIC_API_KEY", None)

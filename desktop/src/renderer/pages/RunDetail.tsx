@@ -38,7 +38,6 @@ import { useRun, useDeleteRun } from '../hooks/useRuns'
 import ErrorState from '../components/common/ErrorState'
 import { useToast } from '../components/common/Toast'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 import { AnalysisWebSocket } from '../api/ws'
 import PipelineProgress, { type Stage } from '../components/progress/PipelineProgress'
 import EventLog from '../components/progress/EventLog'
@@ -165,7 +164,7 @@ export default function RunDetail() {
   const { runId } = useParams<{ runId: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const { baseUrl, wsBaseUrl } = useApiContext()
+  const { baseUrl, wsBaseUrl, client } = useApiContext()
 
   // Detect live session (navigated from NewAnalysis)
   const isLiveSession = Boolean((location.state as Record<string, unknown>)?.liveSession)
@@ -223,40 +222,56 @@ export default function RunDetail() {
     }
   }, [liveStatus, refetch])
 
-  // Load synthesis — ref-guarded to prevent feedback loop from synthesis/synthLoading
-  // being in the deps array. AbortController prevents stale updates on StrictMode
-  // double-mount. Uses granular deps (run_id, status, synthesis_path) instead of
-  // the entire run object to avoid re-firing on unrelated run field changes.
+  // Load synthesis — use bundled synthesis_content if present (DEC-API-011), otherwise
+  // fall back to fetching the artifact individually. Ref-guarded to prevent feedback
+  // loop; AbortController prevents stale updates on StrictMode double-mount.
   const synthLoadedRef = useRef(false)
 
   useEffect(() => {
-    if (!run || !baseUrl || !run.synthesis_path) return
-    if (run.status !== 'completed') return
+    if (!run || run.status !== 'completed') return
     if (synthLoadedRef.current) return
 
+    // Fast path: bundled data is already in the RunDetail response
+    if (run.synthesis_content != null) {
+      synthLoadedRef.current = true
+      setSynthesis(run.synthesis_content as SynthesisResult)
+      return
+    }
+
+    // Slow path: fetch individually (in-progress runs, legacy runs without bundled data)
+    if (!baseUrl || !run.synthesis_path) return
     synthLoadedRef.current = true
     const controller = new AbortController()
     setSynthLoading(true)
-    new SatClient(baseUrl)
+    client!
       .getRunArtifact(run.run_id, run.synthesis_path)
       .then(data => {
         if (!controller.signal.aborted) setSynthesis(data as SynthesisResult)
       })
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load synthesis:', e) })
       .finally(() => {
         if (!controller.signal.aborted) setSynthLoading(false)
       })
     return () => controller.abort()
-  }, [run?.run_id, run?.status, run?.synthesis_path, baseUrl])
+  }, [run?.run_id, run?.status, run?.synthesis_path, run?.synthesis_content, baseUrl])
 
-  // Load technique summaries — batched via Promise.all to produce a single
-  // setSummaries call (vs N calls from forEach(async)), eliminating N re-renders.
+  // Load technique summaries — use bundled technique_summaries if present (DEC-API-011),
+  // otherwise batch-fetch individually via Promise.all (single setSummaries call).
   // loadedSummariesRef tracks in-flight technique IDs outside React state to
   // prevent re-entry without adding summaries to the deps array.
   const loadedSummariesRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    if (!run || !baseUrl) return
+    if (!run) return
+
+    // Fast path: bundled summaries are already in the RunDetail response
+    if (run.technique_summaries != null) {
+      setSummaries(run.technique_summaries)
+      return
+    }
+
+    // Slow path: fetch individually (in-progress runs, legacy runs without bundled data)
+    if (!baseUrl) return
     const pending = run.artifacts.filter(
       (a: Artifact) => a.json_path && !loadedSummariesRef.current.has(a.technique_id)
     )
@@ -266,15 +281,15 @@ export default function RunDetail() {
     pending.forEach(a => loadedSummariesRef.current.add(a.technique_id))
 
     const controller = new AbortController()
-    const client = new SatClient(baseUrl)
 
     Promise.all(
       pending.map(async (artifact: Artifact) => {
         if (!artifact.json_path) return null
         try {
-          const data = await client.getRunArtifact(run.run_id, artifact.json_path)
+          const data = await client!.getRunArtifact(run.run_id, artifact.json_path)
           return data?.summary ? { id: artifact.technique_id, summary: String(data.summary) } : null
-        } catch {
+        } catch (e) {
+          console.error('Failed to load artifact summary:', e)
           return null
         }
       })
@@ -290,15 +305,14 @@ export default function RunDetail() {
     })
 
     return () => controller.abort()
-  }, [run?.run_id, run?.artifacts.length, baseUrl])
+  }, [run?.run_id, run?.artifacts.length, run?.technique_summaries, baseUrl])
 
   // Check whether a report already exists for this run.
   // Fires once when the run reaches completed status and baseUrl is available.
   // Uses getRunReport (html) — a 404 means no report yet, any other response means it exists.
   useEffect(() => {
     if (!run || run.status !== 'completed' || !baseUrl || reportExists !== null) return
-    const client = new SatClient(baseUrl)
-    client.getRunReport(run.run_id, 'html')
+    client!.getRunReport(run.run_id, 'html')
       .then(() => setReportExists(true))
       .catch(() => setReportExists(false))
   }, [run?.run_id, run?.status, baseUrl, reportExists])
@@ -307,7 +321,7 @@ export default function RunDetail() {
     if (!run || !baseUrl) return
     setReportGenerating(true)
     try {
-      await new SatClient(baseUrl).generateReport(run.run_id)
+      await client!.generateReport(run.run_id)
       setReportExists(true)
     } catch (err: unknown) {
       addToast(`Report generation failed: ${(err as Error).message}`, 'error')
@@ -437,7 +451,7 @@ export default function RunDetail() {
                 className="btn-secondary"
                 onClick={() => {
                   if (!baseUrl) return
-                  new SatClient(baseUrl).downloadExport(run.run_id).then(blob => {
+                  client!.downloadExport(run.run_id).then(blob => {
                     const url = URL.createObjectURL(blob)
                     const a = document.createElement('a')
                     a.href = url

@@ -49,7 +49,6 @@ import { useEvidenceGathering } from '../hooks/useEvidenceGathering'
 import { useTechniques } from '../hooks/useTechniques'
 import { useProviders } from '../hooks/useProviders'
 import { useApiContext } from '../api/context'
-import { SatClient } from '../api/client'
 import QuestionInput from '../components/analysis/QuestionInput'
 import TechniqueSelector from '../components/analysis/TechniqueSelector'
 import ProviderConfig from '../components/analysis/ProviderConfig'
@@ -67,7 +66,7 @@ export default function NewAnalysis() {
     techniques?: string[]
     adversarialEnabled?: boolean
   } | undefined
-  const { baseUrl } = useApiContext()
+  const { baseUrl, wsBaseUrl, client } = useApiContext()
   const { startAnalysis } = useAnalysis()
   const { data: concurrency } = useConcurrencyStatus()
   const {
@@ -165,7 +164,7 @@ export default function NewAnalysis() {
     // on the backend and show the review step before running analysis (DEC-DESKTOP-NEW-ANALYSIS-POOL-001).
     if (hasEvidence && baseUrl) {
       try {
-        const client = new SatClient(baseUrl)
+        const client = client!
         const { session_id, pool } = await client.createEvidencePool({
           question: question.trim(),
           name: name.trim() || undefined,
@@ -244,7 +243,7 @@ export default function NewAnalysis() {
     setSubmitting(true)
 
     try {
-      const client = new SatClient(baseUrl)
+      const client = client!
       const response = await client.analyzeWithCuratedEvidence(evidenceSessionId, {
         selected_item_ids: evidencePool?.items
           .filter(i => i.selected)

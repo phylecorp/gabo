@@ -1,57 +1,82 @@
+/**
+ * @decision DEC-DESKTOP-BRAINSTORM-001
+ * @title BrainstormingView: renders BrainstormingResult with Idea objects and cluster significance
+ * @status accepted
+ * @rationale Brainstorming produces Idea objects (id, text, source_rationale), not plain
+ *   strings. The renderer must access idea.text for display and optionally show
+ *   idea.source_rationale as provenance context. Cluster significance is displayed
+ *   below each cluster's ideas to explain why the cluster matters. The focal_question
+ *   anchors the session at the top, and divergent_ideas provides a raw unfiltered view
+ *   before clustering.
+ */
 import IntelCard from '../common/IntelCard'
 import CollapsibleSection from '../common/CollapsibleSection'
 import { registerRenderer } from './rendererRegistry'
 import type { TechniqueRendererProps } from './rendererRegistry'
 
+interface Idea {
+  id?: string
+  text?: string
+  source_rationale?: string
+}
+
 interface IdeaCluster {
-  cluster?: string
-  theme?: string
   name?: string
-  ideas?: string[]
-  items?: string[]
-  [key: string]: any
+  ideas?: Idea[]
+  significance?: string
 }
 
 function IdeaClusterCard({ cluster, idx }: { cluster: IdeaCluster; idx: number }) {
   const accents = ['cyan', 'green', 'amber', 'purple', 'red'] as const
   const accent = accents[idx % accents.length]
-  const title = cluster.cluster || cluster.theme || cluster.name || `Cluster ${idx + 1}`
-  const ideas: string[] = cluster.ideas || cluster.items || []
+  const title = cluster.name || `Cluster ${idx + 1}`
+  const ideas: Idea[] = cluster.ideas || []
 
   return (
     <IntelCard title={title} accent={accent}>
-      {ideas.length > 0
-        ? (
-          <ul className="technique-list">
-            {ideas.map((idea, i) => (
-              <li key={i} className="technique-list-item text-secondary">{idea}</li>
-            ))}
-          </ul>
-        )
-        : (
-          <p className="text-secondary text-sm">
-            {typeof cluster === 'string' ? cluster : '—'}
-          </p>
-        )}
+      {ideas.length > 0 && (
+        <ul className="technique-list">
+          {ideas.map((idea, i) => (
+            <li key={i} className="technique-list-item text-secondary">
+              <span>{idea.text || String(idea)}</span>
+              {idea.source_rationale && (
+                <span className="text-muted text-xs" style={{ display: 'block', marginTop: '0.15rem', fontStyle: 'italic' }}>
+                  {idea.source_rationale}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {cluster.significance && (
+        <p className="text-secondary text-sm" style={{ marginTop: '0.5rem', marginBottom: 0, borderTop: '1px solid var(--border-subtle, rgba(255,255,255,0.06))', paddingTop: '0.5rem' }}>
+          <span style={{ fontWeight: 600 }}>Significance: </span>
+          {cluster.significance}
+        </p>
+      )}
     </IntelCard>
   )
 }
 
 export default function BrainstormingView({ data }: TechniqueRendererProps) {
-  const clusters: IdeaCluster[] =
-    data?.clusters || data?.idea_clusters || data?.themes || []
-  const priorityAreas: string[] =
-    data?.priority_areas || data?.high_priority || []
-  const unconventional: string[] =
-    data?.unconventional_insights || data?.novel_ideas || data?.unexpected || []
-  const allIdeas: string[] =
-    data?.all_ideas || data?.ideas || []
+  const focalQuestion: string = data?.focal_question || ''
+  const divergentIdeas: Idea[] = data?.divergent_ideas || []
+  const clusters: IdeaCluster[] = data?.clusters || []
+  const priorityAreas: string[] = data?.priority_areas || []
+  const unconventional: string[] = data?.unconventional_insights || []
 
   return (
     <div className="technique-container">
       {data?.summary && (
         <IntelCard accent="purple">
           <p className="text-secondary" style={{ margin: 0 }}>{data.summary}</p>
+        </IntelCard>
+      )}
+
+      {/* Focal question anchors the session */}
+      {focalQuestion && (
+        <IntelCard title="Focal Question" accent="amber">
+          <p className="text-secondary" style={{ margin: 0, fontStyle: 'italic' }}>{focalQuestion}</p>
         </IntelCard>
       )}
 
@@ -75,15 +100,40 @@ export default function BrainstormingView({ data }: TechniqueRendererProps) {
         </div>
       )}
 
-      {/* Flat idea list (if no clusters) */}
-      {clusters.length === 0 && allIdeas.length > 0 && (
+      {/* Raw divergent ideas (shown when no clusters, or as a collapsible section) */}
+      {divergentIdeas.length > 0 && clusters.length === 0 && (
         <IntelCard title="All Ideas" accent="purple">
           <ul className="technique-list">
-            {allIdeas.map((idea, i) => (
-              <li key={i} className="technique-list-item text-secondary">{idea}</li>
+            {divergentIdeas.map((idea, i) => (
+              <li key={i} className="technique-list-item text-secondary">
+                <span>{idea.text || String(idea)}</span>
+                {idea.source_rationale && (
+                  <span className="text-muted text-xs" style={{ display: 'block', marginTop: '0.15rem', fontStyle: 'italic' }}>
+                    {idea.source_rationale}
+                  </span>
+                )}
+              </li>
             ))}
           </ul>
         </IntelCard>
+      )}
+
+      {/* Divergent ideas as collapsible when clusters exist */}
+      {divergentIdeas.length > 0 && clusters.length > 0 && (
+        <CollapsibleSection title={`All Raw Ideas (${divergentIdeas.length})`} defaultOpen={false}>
+          <ul className="technique-list">
+            {divergentIdeas.map((idea, i) => (
+              <li key={i} className="technique-list-item text-secondary">
+                <span>{idea.text || String(idea)}</span>
+                {idea.source_rationale && (
+                  <span className="text-muted text-xs" style={{ display: 'block', marginTop: '0.15rem', fontStyle: 'italic' }}>
+                    {idea.source_rationale}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </CollapsibleSection>
       )}
 
       {/* Unconventional insights */}
@@ -95,21 +145,6 @@ export default function BrainstormingView({ data }: TechniqueRendererProps) {
             ))}
           </ul>
         </IntelCard>
-      )}
-
-      {data?.next_steps && (
-        <CollapsibleSection title="Recommended Next Steps" defaultOpen={false}>
-          {Array.isArray(data.next_steps)
-            ? (
-              <ul className="technique-list">
-                {data.next_steps.map((s: string, i: number) => (
-                  <li key={i} className="technique-list-item text-secondary">{s}</li>
-                ))}
-              </ul>
-            )
-            : <p className="text-secondary text-sm">{data.next_steps}</p>
-          }
-        </CollapsibleSection>
       )}
     </div>
   )

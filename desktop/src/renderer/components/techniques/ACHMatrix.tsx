@@ -75,6 +75,11 @@ function CredibilityBadge({ level }: { level: string }) {
   return <IntelBadge label={level || '?'} variant="confidence" level={lvl} />
 }
 
+function RelevanceBadge({ level }: { level: string }) {
+  const lvl = level?.toLowerCase() as 'high' | 'medium' | 'low'
+  return <IntelBadge label={`Rel: ${level || '?'}`} variant="confidence" level={lvl} />
+}
+
 export default function ACHMatrix({ data }: TechniqueRendererProps) {
   const result = data as ACHResult
   const [hovered, setHovered] = useState<HoverCell>(null)
@@ -156,6 +161,7 @@ export default function ACHMatrix({ data }: TechniqueRendererProps) {
                       </p>
                       <div className="ach-evidence-badges">
                         <CredibilityBadge level={ev.credibility} />
+                        {ev.relevance && <RelevanceBadge level={ev.relevance} />}
                       </div>
                     </td>
 

@@ -1,47 +1,113 @@
+/**
+ * @decision DEC-DESKTOP-TEAMAB-001
+ * @title TeamABView: aligned to TeamABResult and TeamPosition model fields
+ * @status accepted
+ * @rationale Fixed field name mismatches that caused 8-13% display rate. The model
+ *   uses team.team (not team.name for display label), team.argument (not team.position),
+ *   jury_assessment (not synthesis), and has stronger_case and recommended_research
+ *   fields that were never rendered. Each TeamPosition also has hypothesis, key_assumptions,
+ *   key_evidence, and acknowledged_weaknesses which were not displayed. Added a
+ *   debate_points table showing topic, team A/B positions, and resolution.
+ */
 import IntelCard from '../common/IntelCard'
-import IntelBadge from '../common/IntelBadge'
 import CollapsibleSection from '../common/CollapsibleSection'
 import { registerRenderer } from './rendererRegistry'
 import type { TechniqueRendererProps } from './rendererRegistry'
 
-interface TeamArgument {
-  point?: string
+interface TeamPosition {
+  team?: string
+  hypothesis?: string
+  key_assumptions?: string[]
+  key_evidence?: string[]
   argument?: string
-  claim?: string
-  evidence?: string
-  strength?: string
+  acknowledged_weaknesses?: string[]
   [key: string]: any
 }
 
-function StrengthBadge({ strength }: { strength?: string }) {
-  if (!strength) return null
-  const s = strength.toLowerCase()
-  const cls = s === 'strong' || s === 'high' ? 'badge-green'
-    : s === 'moderate' || s === 'medium' ? 'badge-amber'
-    : 'badge-red'
-  return <span className={`intel-badge ${cls}`}>{strength}</span>
+interface DebatePoint {
+  topic?: string
+  team_a_position?: string
+  team_b_position?: string
+  resolution?: string
+  [key: string]: any
+}
+
+function StrongerCaseBadge({ side }: { side?: string }) {
+  if (!side) return null
+  if (side === 'Indeterminate') return <span className="intel-badge badge-default">Indeterminate</span>
+  const cls = side === 'A' ? 'badge-green' : 'badge-amber'
+  return <span className={`intel-badge ${cls}`}>Team {side} Stronger</span>
+}
+
+function TeamCard({
+  position,
+  accent,
+}: {
+  position: TeamPosition | null | undefined
+  accent: 'cyan' | 'amber'
+}) {
+  if (!position) return null
+  const teamLabel = position.team ? `Team ${position.team}` : 'Team'
+  const assumptions: string[] = position.key_assumptions || []
+  const evidence: string[] = position.key_evidence || []
+  const weaknesses: string[] = position.acknowledged_weaknesses || []
+
+  return (
+    <IntelCard title={teamLabel} accent={accent}>
+      {position.hypothesis && (
+        <div style={{ marginBottom: 10 }}>
+          <p className="text-sm" style={{ fontWeight: 600, marginBottom: 4 }}>Hypothesis</p>
+          <p className="text-secondary text-sm" style={{ margin: 0 }}>{position.hypothesis}</p>
+        </div>
+      )}
+
+      {assumptions.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <p className="text-sm" style={{ fontWeight: 600, marginBottom: 4 }}>Key Assumptions</p>
+          <ul className="technique-list">
+            {assumptions.map((a, i) => (
+              <li key={i} className="technique-list-item text-secondary text-sm">{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {evidence.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <p className="text-sm" style={{ fontWeight: 600, marginBottom: 4 }}>Key Evidence</p>
+          <ul className="technique-list">
+            {evidence.map((e, i) => (
+              <li key={i} className="technique-list-item technique-list-item-positive text-sm">{e}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {position.argument && (
+        <div style={{ marginBottom: 10 }}>
+          <p className="text-sm" style={{ fontWeight: 600, marginBottom: 4 }}>Argument</p>
+          <p className="text-secondary text-sm" style={{ margin: 0 }}>{position.argument}</p>
+        </div>
+      )}
+
+      {weaknesses.length > 0 && (
+        <div>
+          <p className="text-sm" style={{ fontWeight: 600, marginBottom: 4 }}>Acknowledged Weaknesses</p>
+          <ul className="technique-list">
+            {weaknesses.map((w, i) => (
+              <li key={i} className="technique-list-item technique-list-item-warning text-sm">{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </IntelCard>
+  )
 }
 
 export default function TeamABView({ data }: TechniqueRendererProps) {
-  const teamAArgs: TeamArgument[] =
-    data?.team_a_arguments || data?.team_a?.arguments || data?.team_a?.points || []
-  const teamBArgs: TeamArgument[] =
-    data?.team_b_arguments || data?.team_b?.arguments || data?.team_b?.points || []
-
-  const teamAName: string =
-    data?.team_a_name || data?.team_a?.name || 'Team A'
-  const teamBName: string =
-    data?.team_b_name || data?.team_b?.name || 'Team B'
-
-  const teamAPosition: string =
-    data?.team_a_position || data?.team_a?.position || ''
-  const teamBPosition: string =
-    data?.team_b_position || data?.team_b?.position || ''
-
-  const teamAStrength: string =
-    data?.team_a_strength || data?.team_a?.overall_strength || ''
-  const teamBStrength: string =
-    data?.team_b_strength || data?.team_b?.overall_strength || ''
+  const debatePoints: DebatePoint[] = data?.debate_points || []
+  const areasOfAgreement: string[] = data?.areas_of_agreement || []
+  const recommendedResearch: string[] = data?.recommended_research || []
 
   return (
     <div className="technique-container">
@@ -53,96 +119,71 @@ export default function TeamABView({ data }: TechniqueRendererProps) {
 
       {/* Two-column team comparison */}
       <div className="technique-two-col">
-        {/* Team A */}
-        <IntelCard
-          title={teamAName}
-          subtitle={teamAStrength ? `Strength: ${teamAStrength}` : undefined}
-          accent="cyan"
-        >
-          {teamAPosition && (
-            <p className="team-position text-secondary">{teamAPosition}</p>
-          )}
-          {teamAStrength && (
-            <div style={{ marginBottom: 8 }}>
-              <StrengthBadge strength={teamAStrength} />
-            </div>
-          )}
-          {teamAArgs.length > 0 && (
-            <ul className="technique-list">
-              {teamAArgs.map((arg, i) => (
-                <li key={i} className="team-arg-item">
-                  <p className="team-arg-text">
-                    {arg.point || arg.argument || arg.claim}
-                  </p>
-                  {arg.evidence && (
-                    <p className="team-arg-evidence text-secondary text-sm">
-                      {arg.evidence}
-                    </p>
-                  )}
-                  {arg.strength && (
-                    <StrengthBadge strength={arg.strength} />
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </IntelCard>
-
-        {/* Team B */}
-        <IntelCard
-          title={teamBName}
-          subtitle={teamBStrength ? `Strength: ${teamBStrength}` : undefined}
-          accent="amber"
-        >
-          {teamBPosition && (
-            <p className="team-position text-secondary">{teamBPosition}</p>
-          )}
-          {teamBStrength && (
-            <div style={{ marginBottom: 8 }}>
-              <StrengthBadge strength={teamBStrength} />
-            </div>
-          )}
-          {teamBArgs.length > 0 && (
-            <ul className="technique-list">
-              {teamBArgs.map((arg, i) => (
-                <li key={i} className="team-arg-item">
-                  <p className="team-arg-text">
-                    {arg.point || arg.argument || arg.claim}
-                  </p>
-                  {arg.evidence && (
-                    <p className="team-arg-evidence text-secondary text-sm">
-                      {arg.evidence}
-                    </p>
-                  )}
-                  {arg.strength && (
-                    <StrengthBadge strength={arg.strength} />
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </IntelCard>
+        <TeamCard position={data?.team_a} accent="cyan" />
+        <TeamCard position={data?.team_b} accent="amber" />
       </div>
 
-      {/* Synthesis / adjudication */}
-      {data?.synthesis && (
-        <IntelCard title="Synthesis" accent="green">
-          <p className="text-secondary" style={{ margin: 0 }}>{data.synthesis}</p>
+      {/* Debate points table */}
+      {debatePoints.length > 0 && (
+        <IntelCard title="Debate Points" accent="purple">
+          <div className="intel-table-wrapper">
+            <table className="intel-table">
+              <thead>
+                <tr>
+                  <th>Topic</th>
+                  <th>Team A Position</th>
+                  <th>Team B Position</th>
+                  <th>Resolution</th>
+                </tr>
+              </thead>
+              <tbody>
+                {debatePoints.map((dp, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{dp.topic || '—'}</td>
+                    <td className="text-secondary text-sm">{dp.team_a_position || '—'}</td>
+                    <td className="text-secondary text-sm">{dp.team_b_position || '—'}</td>
+                    <td className="text-secondary text-sm">{dp.resolution || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </IntelCard>
       )}
 
-      {data?.areas_of_agreement && (
+      {/* Jury assessment */}
+      {data?.jury_assessment && (
+        <IntelCard title="Jury Assessment" accent="green">
+          <div style={{ marginBottom: data?.stronger_case ? 10 : 0 }}>
+            <p className="text-secondary" style={{ margin: 0 }}>{data.jury_assessment}</p>
+          </div>
+          {data?.stronger_case && (
+            <div style={{ marginTop: 8 }}>
+              <StrongerCaseBadge side={data.stronger_case} />
+            </div>
+          )}
+        </IntelCard>
+      )}
+
+      {/* Areas of agreement */}
+      {areasOfAgreement.length > 0 && (
         <CollapsibleSection title="Areas of Agreement" defaultOpen={false}>
-          {Array.isArray(data.areas_of_agreement)
-            ? (
-              <ul className="technique-list">
-                {data.areas_of_agreement.map((item: string, i: number) => (
-                  <li key={i} className="technique-list-item technique-list-item-positive">{item}</li>
-                ))}
-              </ul>
-            )
-            : <p className="text-secondary text-sm">{data.areas_of_agreement}</p>
-          }
+          <ul className="technique-list">
+            {areasOfAgreement.map((item, i) => (
+              <li key={i} className="technique-list-item technique-list-item-positive">{item}</li>
+            ))}
+          </ul>
+        </CollapsibleSection>
+      )}
+
+      {/* Recommended research */}
+      {recommendedResearch.length > 0 && (
+        <CollapsibleSection title="Recommended Research" defaultOpen={false}>
+          <ul className="technique-list">
+            {recommendedResearch.map((r, i) => (
+              <li key={i} className="technique-list-item text-secondary">{r}</li>
+            ))}
+          </ul>
         </CollapsibleSection>
       )}
     </div>

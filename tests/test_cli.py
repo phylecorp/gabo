@@ -15,7 +15,7 @@ class TestCLI:
     def test_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "Structured Analytic Techniques" in result.output
+        assert "Gabo" in result.output
 
     def test_analyze_help(self):
         result = runner.invoke(app, ["analyze", "--help"])

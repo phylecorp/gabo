@@ -94,12 +94,13 @@ def test_techniques_categories_valid(client):
 # ---------------------------------------------------------------------------
 
 
-def test_providers_returns_all_three(client):
+def test_providers_returns_all_known(client):
+    # Includes the three LLM providers plus the two research providers.
     resp = client.get("/api/config/providers")
     assert resp.status_code == 200
     providers = resp.json()
     names = {p["name"] for p in providers}
-    assert names == {"anthropic", "openai", "gemini"}
+    assert names == {"anthropic", "openai", "gemini", "perplexity", "brave"}
 
 
 def test_providers_have_required_fields(client):

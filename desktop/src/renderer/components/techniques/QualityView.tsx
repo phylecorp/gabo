@@ -1,16 +1,27 @@
+/**
+ * @decision DEC-DESKTOP-QUALITY-001
+ * @title QualityView: source table aligned to SourceQualityRow model fields
+ * @status accepted
+ * @rationale Fixed field name mismatches that caused 8-13% display rate. The model
+ *   uses source_id (not source/name), source_type (not type), gaps (not limitations),
+ *   overall_assessment (not overall_quality), key_gaps (not information_gaps/gaps list).
+ *   Also added access_quality, corroboration, deception_indicators, and
+ *   collection_requirements which were present in the model but never rendered.
+ */
 import IntelCard from '../common/IntelCard'
 import IntelBadge from '../common/IntelBadge'
 import CollapsibleSection from '../common/CollapsibleSection'
 import { registerRenderer } from './rendererRegistry'
 import type { TechniqueRendererProps } from './rendererRegistry'
 
-interface Source {
-  source?: string
-  name?: string
+interface SourceQualityRow {
+  source_id: string
+  description?: string
+  source_type?: string
   reliability?: string
-  credibility?: string
-  type?: string
-  limitations?: string
+  access_quality?: string
+  corroboration?: string
+  gaps?: string
   [key: string]: any
 }
 
@@ -18,17 +29,17 @@ function ReliabilityBadge({ level }: { level?: string }) {
   if (!level) return null
   const lvl = level.toLowerCase()
   const badgeLevel =
-    lvl === 'high' || lvl === 'reliable' ? 'high'
-      : lvl === 'medium' || lvl === 'moderate' ? 'medium'
+    lvl === 'high' ? 'high'
+      : lvl === 'medium' ? 'medium'
       : 'low'
   return <IntelBadge label={level} variant="confidence" level={badgeLevel} />
 }
 
 export default function QualityView({ data }: TechniqueRendererProps) {
-  const sources: Source[] = data?.sources || data?.source_reliability || []
-  const gaps: string[] = data?.information_gaps || data?.gaps || []
-  const strengths: string[] = data?.strengths || []
-  const weaknesses: string[] = data?.weaknesses || data?.limitations || []
+  const sources: SourceQualityRow[] = data?.sources || []
+  const keyGaps: string[] = data?.key_gaps || []
+  const deceptionIndicators: string[] = data?.deception_indicators || []
+  const collectionRequirements: string[] = data?.collection_requirements || []
 
   return (
     <div className="technique-container">
@@ -38,16 +49,9 @@ export default function QualityView({ data }: TechniqueRendererProps) {
         </IntelCard>
       )}
 
-      {data?.overall_quality && (
-        <IntelCard title="Overall Quality Assessment" accent="cyan">
-          <div className="quality-overall">
-            <p className="text-secondary" style={{ margin: 0 }}>{data.overall_quality}</p>
-            {data?.quality_rating && (
-              <div style={{ marginTop: 8 }}>
-                <ReliabilityBadge level={data.quality_rating} />
-              </div>
-            )}
-          </div>
+      {data?.overall_assessment && (
+        <IntelCard title="Overall Assessment" accent="cyan">
+          <p className="text-secondary" style={{ margin: 0 }}>{data.overall_assessment}</p>
         </IntelCard>
       )}
 
@@ -57,21 +61,27 @@ export default function QualityView({ data }: TechniqueRendererProps) {
             <table className="intel-table">
               <thead>
                 <tr>
-                  <th>Source</th>
-                  <th>Reliability</th>
+                  <th>Source ID</th>
+                  <th>Description</th>
                   <th>Type</th>
-                  <th>Limitations</th>
+                  <th>Reliability</th>
+                  <th>Access Quality</th>
+                  <th>Corroboration</th>
+                  <th>Gaps</th>
                 </tr>
               </thead>
               <tbody>
                 {sources.map((s, i) => (
                   <tr key={i}>
-                    <td>{s.source || s.name || '—'}</td>
+                    <td className="text-sm" style={{ fontWeight: 600 }}>{s.source_id || '—'}</td>
+                    <td className="text-secondary text-sm">{s.description || '—'}</td>
+                    <td className="text-secondary text-sm">{s.source_type || '—'}</td>
                     <td>
-                      <ReliabilityBadge level={s.reliability || s.credibility} />
+                      <ReliabilityBadge level={s.reliability} />
                     </td>
-                    <td className="text-secondary text-sm">{s.type || '—'}</td>
-                    <td className="text-secondary text-sm">{s.limitations || '—'}</td>
+                    <td className="text-secondary text-sm">{s.access_quality || '—'}</td>
+                    <td className="text-secondary text-sm">{s.corroboration || '—'}</td>
+                    <td className="text-secondary text-sm">{s.gaps || '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -80,36 +90,10 @@ export default function QualityView({ data }: TechniqueRendererProps) {
         </IntelCard>
       )}
 
-      <div className="technique-two-col">
-        {strengths.length > 0 && (
-          <IntelCard title="Strengths" accent="green">
-            <ul className="technique-list">
-              {strengths.map((s, i) => (
-                <li key={i} className="technique-list-item technique-list-item-positive">
-                  {s}
-                </li>
-              ))}
-            </ul>
-          </IntelCard>
-        )}
-
-        {weaknesses.length > 0 && (
-          <IntelCard title="Weaknesses / Limitations" accent="amber">
-            <ul className="technique-list">
-              {weaknesses.map((w, i) => (
-                <li key={i} className="technique-list-item technique-list-item-warning">
-                  {w}
-                </li>
-              ))}
-            </ul>
-          </IntelCard>
-        )}
-      </div>
-
-      {gaps.length > 0 && (
-        <IntelCard title="Information Gaps" accent="red">
+      {keyGaps.length > 0 && (
+        <IntelCard title="Key Gaps" accent="red">
           <ul className="technique-list">
-            {gaps.map((g, i) => (
+            {keyGaps.map((g, i) => (
               <li key={i} className="technique-list-item technique-list-item-gap">
                 {g}
               </li>
@@ -118,18 +102,25 @@ export default function QualityView({ data }: TechniqueRendererProps) {
         </IntelCard>
       )}
 
-      {data?.recommendations && (
-        <CollapsibleSection title="Recommendations" defaultOpen={false}>
-          {Array.isArray(data.recommendations)
-            ? (
-              <ul className="technique-list">
-                {data.recommendations.map((r: string, i: number) => (
-                  <li key={i} className="technique-list-item text-secondary">{r}</li>
-                ))}
-              </ul>
-            )
-            : <p className="text-secondary text-sm">{data.recommendations}</p>
-          }
+      {deceptionIndicators.length > 0 && (
+        <IntelCard title="Deception Indicators" accent="amber">
+          <ul className="technique-list">
+            {deceptionIndicators.map((d, i) => (
+              <li key={i} className="technique-list-item technique-list-item-warning">
+                {d}
+              </li>
+            ))}
+          </ul>
+        </IntelCard>
+      )}
+
+      {collectionRequirements.length > 0 && (
+        <CollapsibleSection title="Collection Requirements" defaultOpen={false}>
+          <ul className="technique-list">
+            {collectionRequirements.map((r, i) => (
+              <li key={i} className="technique-list-item text-secondary">{r}</li>
+            ))}
+          </ul>
         </CollapsibleSection>
       )}
     </div>

@@ -41,9 +41,11 @@ export default function TechniqueCard({ artifact, runId, summary }: TechniqueCar
           category={category}
         />
       </div>
-      {truncatedSummary && (
+      {truncatedSummary ? (
         <p className="technique-result-card-summary">{truncatedSummary}</p>
-      )}
+      ) : summary === undefined ? (
+        <p className="technique-result-card-summary technique-result-card-loading">Loading...</p>
+      ) : null}
       <span className="technique-result-card-cta">View full analysis →</span>
     </div>
   )

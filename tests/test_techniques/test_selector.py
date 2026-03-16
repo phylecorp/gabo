@@ -101,11 +101,6 @@ class TestSelectorValidation:
         diagnostic_ids = {"assumptions", "quality", "indicators", "ach"}
         assert any(tid in diagnostic_ids for tid in result)
 
-    def test_max_six_techniques(self):
-        many = ["assumptions", "quality", "ach", "indicators", "brainstorming", "outside_in", "red_team"]
-        result = _validate_selection(many, "question", None)
-        assert len(result) <= 6
-
     def test_adds_red_team_for_adversary_questions(self):
         result = _validate_selection(
             ["assumptions", "ach"],

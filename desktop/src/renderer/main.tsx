@@ -19,6 +19,7 @@ import { EvidenceGatheringProvider } from './api/evidenceContext'
 import Dashboard from './pages/Dashboard'
 import NewAnalysis from './pages/NewAnalysis'
 import RunDetail from './pages/RunDetail'
+import EvidenceDetail from './pages/EvidenceDetail'
 import TechniqueDetail from './pages/TechniqueDetail'
 import ReportView from './pages/ReportView'
 import Settings from './pages/Settings'
@@ -45,6 +46,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                   <Route index element={<Dashboard />} />
                   <Route path="new" element={<NewAnalysis />} />
                   <Route path="runs/:runId" element={<RunDetail />} />
+                  <Route path="runs/:runId/evidence" element={<EvidenceDetail />} />
                   <Route path="runs/:runId/techniques/:techniqueId" element={<TechniqueDetail />} />
                   <Route path="runs/:runId/report" element={<ReportView />} />
                   <Route path="settings" element={<Settings />} />

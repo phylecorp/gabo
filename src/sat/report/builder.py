@@ -183,7 +183,10 @@ class ReportBuilder:
                     break
                 except Exception:
                     logger.debug("Could not load synthesis from %s", artifact.json_path)
-        # Fallback: try loading from synthesis_path in manifest
+        # Fallback: try loading from synthesis_path in manifest.
+        # New manifests store the .json path directly; old manifests stored the .md path.
+        # .with_suffix(".json") is a no-op for .json paths and converts .md paths to .json —
+        # preserving backward compatibility with runs produced before this fix.
         if synthesis is None and self.manifest.synthesis_path:
             synth_json = Path(self.manifest.synthesis_path).with_suffix(".json")
             for candidate in [synth_json, self.output_dir.parent / synth_json, self.output_dir / synth_json.name]:

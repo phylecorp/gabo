@@ -81,6 +81,26 @@ class TestArtifactWriter:
         assert len(manifest["artifacts"]) == 1
         assert manifest["techniques_completed"] == ["assumptions"]
 
+    def test_write_manifest_with_synthesis_path(self, tmp_path):
+        """synthesis_path passed to write_manifest should be stored in the manifest JSON as-is."""
+        writer = ArtifactWriter(tmp_path / "output", "test123", "Test question?")
+        result = self._sample_result()
+        artifact = writer.write_result(result)
+
+        # The json_path is what write_result produces and is what the pipeline should pass
+        manifest_path = writer.write_manifest(
+            techniques_selected=["assumptions"],
+            techniques_completed=["assumptions"],
+            evidence_provided=True,
+            synthesis_path=artifact.json_path,
+        )
+
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["synthesis_path"] == artifact.json_path
+        assert manifest["synthesis_path"].endswith(".json"), (
+            "synthesis_path should point to the JSON artifact, not the markdown file"
+        )
+
     def test_numbering_increments(self, tmp_path):
         """Each result should get an incrementing number prefix."""
         writer = ArtifactWriter(tmp_path / "output", "test123", "Test?")

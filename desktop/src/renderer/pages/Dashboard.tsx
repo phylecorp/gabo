@@ -236,7 +236,19 @@ export default function Dashboard() {
                     </span>
                   </div>
                   {run.evidence_provided && (
-                    <span className="intel-badge badge-default" style={{ marginTop: 6 }}>evidence</span>
+                    <button
+                      type="button"
+                      className="intel-badge badge-default mt-6"
+                      style={{ cursor: 'pointer', background: 'none', border: '1px solid var(--color-border-subtle)', borderRadius: 4 }}
+                      title="View evidence pool"
+                      onClick={e => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        navigate(`/runs/${run.run_id}/evidence`)
+                      }}
+                    >
+                      evidence
+                    </button>
                   )}
                 </IntelCard>
               </Link>

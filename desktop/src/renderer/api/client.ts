@@ -22,7 +22,9 @@ import type {
   EvidenceGatherRequest,
   EvidenceGatherResponse,
   EvidencePool,
-  CuratedAnalysisRequest
+  CuratedAnalysisRequest,
+  PoolRequest,
+  PoolResponse,
 } from './types'
 
 export class SatClient {
@@ -139,6 +141,13 @@ export class SatClient {
     })
   }
 
+  async createEvidencePool(req: PoolRequest) {
+    return this.request<PoolResponse>('/api/evidence/pool', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    })
+  }
+
   async getEvidencePool(sessionId: string) {
     return this.request<EvidencePool>(`/api/evidence/${sessionId}`)
   }
@@ -148,6 +157,16 @@ export class SatClient {
       method: 'POST',
       body: JSON.stringify(req),
     })
+  }
+
+  async getRunEvidence(runId: string): Promise<EvidencePool | null> {
+    try {
+      return await this.request<EvidencePool>(`/api/runs/${runId}/evidence`)
+    } catch (err) {
+      const msg = (err as Error).message ?? ''
+      if (msg.includes('404')) return null
+      throw err
+    }
   }
 
   async cancelRun(runId: string) {

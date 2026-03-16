@@ -1,36 +1,50 @@
+/**
+ * @decision DEC-DESKTOP-DA-001
+ * @title DevilsAdvocacyView: aligned to DevilsAdvocacyResult model fields
+ * @status accepted
+ * @rationale Fixed field name mismatches that caused 8-13% display rate. The model
+ *   uses mainline_judgment (not dominant_view/original_position/consensus_view),
+ *   challenged_assumptions as structured ChallengedAssumption objects (not key_challenges
+ *   array of strings), alternative_hypothesis (not devils_advocate_case/counter_argument).
+ *   Added mainline_evidence, supporting_evidence_for_alternative, quality_of_evidence_concerns,
+ *   and recommended_actions which were in the model but never rendered. ChallengedAssumption
+ *   cards now show assumption, challenge, evidence_against, and vulnerability badge.
+ */
 import IntelCard from '../common/IntelCard'
-import IntelBadge from '../common/IntelBadge'
 import CollapsibleSection from '../common/CollapsibleSection'
 import { registerRenderer } from './rendererRegistry'
 import type { TechniqueRendererProps } from './rendererRegistry'
 
-interface CounterChallenge {
-  point?: string
-  argument?: string
+interface ChallengedAssumption {
+  assumption?: string
   challenge?: string
-  evidence?: string
-  severity?: string
+  evidence_against?: string
+  vulnerability?: string
   [key: string]: any
 }
 
-function SeverityBadge({ severity }: { severity?: string }) {
-  if (!severity) return null
-  const s = severity.toLowerCase()
-  const cls = s === 'high' || s === 'critical' ? 'badge-red'
-    : s === 'medium' ? 'badge-amber'
+function VulnerabilityBadge({ level }: { level?: string }) {
+  if (!level) return null
+  const l = level.toLowerCase()
+  const cls = l === 'high' ? 'badge-red' : l === 'medium' ? 'badge-amber' : 'badge-green'
+  return <span className={`intel-badge ${cls}`}>{level} Vulnerability</span>
+}
+
+function ConclusionBadge({ conclusion }: { conclusion?: string }) {
+  if (!conclusion) return null
+  const c = conclusion.toLowerCase()
+  const cls = c.includes('overturned') ? 'badge-red'
+    : c.includes('weakened') ? 'badge-amber'
     : 'badge-green'
-  return <span className={`intel-badge ${cls}`}>{severity}</span>
+  return <span className={`intel-badge ${cls}`} style={{ fontSize: '0.875rem', padding: '4px 10px' }}>{conclusion}</span>
 }
 
 export default function DevilsAdvocacyView({ data }: TechniqueRendererProps) {
-  const dominantView: string =
-    data?.dominant_view || data?.original_position || data?.consensus_view || ''
-  const counterCase: string =
-    data?.devils_advocate_case || data?.counter_argument || data?.alternative_case || ''
-  const challenges: CounterChallenge[] =
-    data?.key_challenges || data?.challenges || data?.counter_points || []
-  const conclusion: string =
-    data?.conclusion || data?.revised_assessment || ''
+  const challengedAssumptions: ChallengedAssumption[] = data?.challenged_assumptions || []
+  const mainlineEvidence: string[] = data?.mainline_evidence || []
+  const supportingEvidence: string[] = data?.supporting_evidence_for_alternative || []
+  const evidenceConcerns: string[] = data?.quality_of_evidence_concerns || []
+  const recommendedActions: string[] = data?.recommended_actions || []
 
   return (
     <div className="technique-container">
@@ -40,63 +54,89 @@ export default function DevilsAdvocacyView({ data }: TechniqueRendererProps) {
         </IntelCard>
       )}
 
-      {/* Two-column: dominant view vs devil's advocate */}
+      {/* Two-column: mainline vs alternative */}
       <div className="technique-two-col">
-        {dominantView && (
-          <IntelCard title="Dominant View" accent="cyan">
-            <p className="text-secondary" style={{ margin: 0 }}>{dominantView}</p>
+        {data?.mainline_judgment && (
+          <IntelCard title="Mainline Judgment" accent="cyan">
+            <p className="text-secondary" style={{ margin: 0 }}>{data.mainline_judgment}</p>
+            {mainlineEvidence.length > 0 && (
+              <ul className="technique-list" style={{ marginTop: 12 }}>
+                {mainlineEvidence.map((e, i) => (
+                  <li key={i} className="technique-list-item technique-list-item-positive text-sm">{e}</li>
+                ))}
+              </ul>
+            )}
           </IntelCard>
         )}
-        {counterCase && (
-          <IntelCard title="Devil's Advocate Case" accent="amber">
-            <p className="text-secondary" style={{ margin: 0 }}>{counterCase}</p>
+
+        {data?.alternative_hypothesis && (
+          <IntelCard title="Alternative Hypothesis" accent="amber">
+            <p className="text-secondary" style={{ margin: 0 }}>{data.alternative_hypothesis}</p>
+            {supportingEvidence.length > 0 && (
+              <ul className="technique-list" style={{ marginTop: 12 }}>
+                {supportingEvidence.map((e, i) => (
+                  <li key={i} className="technique-list-item technique-list-item-positive text-sm">{e}</li>
+                ))}
+              </ul>
+            )}
           </IntelCard>
         )}
       </div>
 
-      {/* Key challenges */}
-      {challenges.length > 0 && (
-        <IntelCard title="Key Challenges" accent="red">
-          <ul className="technique-list">
-            {challenges.map((c, i) => (
-              <li key={i} className="challenge-item">
-                <div className="challenge-header">
-                  <span className="challenge-text">
-                    {c.point || c.argument || c.challenge}
-                  </span>
-                  <SeverityBadge severity={c.severity} />
+      {/* Challenged assumptions as cards */}
+      {challengedAssumptions.length > 0 && (
+        <IntelCard title="Challenged Assumptions" accent="red">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {challengedAssumptions.map((ca, i) => (
+              <div key={i} className="intel-card intel-card-default" style={{ padding: '12px 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                  <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{ca.assumption || '—'}</span>
+                  <VulnerabilityBadge level={ca.vulnerability} />
                 </div>
-                {c.evidence && (
-                  <p className="challenge-evidence text-secondary text-sm">
-                    {c.evidence}
+                {ca.challenge && (
+                  <p className="text-secondary text-sm" style={{ margin: '4px 0' }}>
+                    <strong>Challenge:</strong> {ca.challenge}
                   </p>
                 )}
-              </li>
+                {ca.evidence_against && (
+                  <p className="text-secondary text-sm" style={{ margin: '4px 0' }}>
+                    <strong>Evidence against:</strong> {ca.evidence_against}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </IntelCard>
+      )}
+
+      {/* Conclusion */}
+      {data?.conclusion && (
+        <IntelCard title="Conclusion" accent="green">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <ConclusionBadge conclusion={data.conclusion} />
+          </div>
+        </IntelCard>
+      )}
+
+      {/* Evidence concerns */}
+      {evidenceConcerns.length > 0 && (
+        <IntelCard title="Evidence Quality Concerns" accent="amber">
+          <ul className="technique-list">
+            {evidenceConcerns.map((c, i) => (
+              <li key={i} className="technique-list-item technique-list-item-warning">{c}</li>
             ))}
           </ul>
         </IntelCard>
       )}
 
-      {/* Conclusion */}
-      {conclusion && (
-        <IntelCard title="Conclusion / Revised Assessment" accent="green">
-          <p className="text-secondary" style={{ margin: 0 }}>{conclusion}</p>
-        </IntelCard>
-      )}
-
-      {/* Vulnerabilities */}
-      {data?.vulnerabilities && (
-        <CollapsibleSection title="Vulnerabilities Identified" defaultOpen={false}>
-          {Array.isArray(data.vulnerabilities)
-            ? (
-              <ul className="technique-list">
-                {data.vulnerabilities.map((v: string, i: number) => (
-                  <li key={i} className="technique-list-item text-secondary">{v}</li>
-                ))}
-              </ul>
-            )
-            : <p className="text-secondary text-sm">{data.vulnerabilities}</p>
-          }
+      {/* Recommended actions */}
+      {recommendedActions.length > 0 && (
+        <CollapsibleSection title="Recommended Actions" defaultOpen={false}>
+          <ul className="technique-list">
+            {recommendedActions.map((r, i) => (
+              <li key={i} className="technique-list-item text-secondary">{r}</li>
+            ))}
+          </ul>
         </CollapsibleSection>
       )}
     </div>

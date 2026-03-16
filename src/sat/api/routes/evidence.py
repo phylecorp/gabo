@@ -6,11 +6,37 @@
 @rationale The existing single-shot POST /api/analysis → pipeline runs end-to-end.
 These new endpoints split that into: gather evidence → user curates → run analysis
 with selected evidence. The existing /api/analysis endpoint is unchanged for CLI/power users.
+
+@decision DEC-API-013
+@title Persist curated EvidencePool as evidence.json after analysis completes
+@status accepted
+@rationale The curated evidence selection is meaningful context for the run — which
+items were selected, their confidence, categories, and sources. Persisting it as
+evidence.json in the run output directory (alongside manifest.json) lets the frontend
+retrieve it later via GET /api/runs/{run_id}/evidence without re-gathering. The
+manifest.json is also updated with evidence_path="evidence.json" so RunDetail includes
+the path. Persistence happens inside the execute() coroutine after run_analysis returns
+and output_path is known. On failure the evidence write is best-effort (logged but not
+re-raised) to avoid masking the real pipeline error.
+
+@decision DEC-API-014
+@title POST /api/evidence/pool: synchronous pool creation without LLM calls
+@status accepted
+@rationale The gather endpoint uses LLMs for decomposition/research — it's async,
+expensive, and requires a WebSocket for progress. When users type evidence manually
+or upload documents, they already have the raw material; no LLM processing is needed
+to build a reviewable pool. The /pool endpoint fills this gap: it runs document
+ingestion (filesystem/HTTP I/O only), splits text into paragraphs with _split_to_user_items,
+merges both lists, and returns a ready EvidencePool in a single synchronous HTTP response.
+The resulting session is immediately usable by the existing analyze_curated endpoint.
+Document items use "DOC-<n>" IDs and "document" source; user text items use "U-<n>" and
+"user" source — consistent with the prefix conventions in EvidenceItem (DEC-EVIDENCE-001).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING
 import logging
 from datetime import UTC, datetime
@@ -25,6 +51,8 @@ from sat.api.models import (
     CuratedAnalysisRequest,
     EvidenceGatherRequest,
     EvidenceGatherResponse,
+    PoolRequest,
+    PoolResponse,
 )
 from sat.api.run_manager import ActiveRun, RunManager
 from sat.config import (
@@ -36,7 +64,9 @@ from sat.config import (
 )
 from sat.evidence import gather_evidence
 from sat.evidence.formatter import format_curated_evidence
-from sat.models.evidence import EvidencePool
+from sat.evidence.gatherer import _split_to_user_items
+from sat.ingestion import ingest_evidence
+from sat.models.evidence import EvidenceItem, EvidencePool
 from sat.pipeline import run_analysis
 
 if TYPE_CHECKING:
@@ -81,6 +111,26 @@ async def _broadcast_run(run: ActiveRun, event_dict: dict) -> None:
     for ws in disconnected:
         if ws in run.ws_clients:
             run.ws_clients.remove(ws)
+
+
+def _persist_evidence(output_path: Path, pool: EvidencePool) -> None:
+    """Write the curated EvidencePool to evidence.json and update manifest.json.
+
+    Writes ``evidence.json`` to *output_path* and then patches ``manifest.json``
+    in the same directory to set ``evidence_path = "evidence.json"``.
+
+    Called after run_analysis() completes with a known output_path. Errors
+    from this function are best-effort — the caller logs and suppresses them so
+    a persistence failure does not mask the real pipeline result (DEC-API-013).
+    """
+    evidence_file = output_path / "evidence.json"
+    evidence_file.write_text(pool.model_dump_json(), encoding="utf-8")
+
+    manifest_file = output_path / "manifest.json"
+    if manifest_file.exists():
+        data = json.loads(manifest_file.read_text(encoding="utf-8"))
+        data["evidence_path"] = "evidence.json"
+        manifest_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def create_evidence_router(
@@ -214,6 +264,12 @@ def create_evidence_router(
             for item in pool.items
         ]
 
+        # Build a curated EvidencePool with selection state for persistence.
+        # This is written to evidence.json after the pipeline completes so the
+        # frontend can retrieve the curated evidence selection via
+        # GET /api/runs/{run_id}/evidence (DEC-API-013).
+        curated_pool = pool.model_copy(update={"items": curated_items})
+
         evidence_text = format_curated_evidence(
             items=curated_items,
             sources=pool.sources,
@@ -268,6 +324,18 @@ def create_evidence_router(
                 output_path = await run_analysis(config, run.bus, rate_limiter)
                 run.output_dir = str(output_path)
                 run.status = "completed"
+
+                # Persist the curated EvidencePool as evidence.json in the output
+                # directory and update manifest.json with evidence_path (DEC-API-013).
+                try:
+                    _persist_evidence(output_path, curated_pool)
+                except Exception:
+                    logger.warning(
+                        "Failed to persist evidence.json for run %s",
+                        run.run_id,
+                        exc_info=True,
+                    )
+
                 completion = {
                     "type": "run_completed",
                     "data": {"output_dir": str(output_path), "run_id": run.run_id},
@@ -292,5 +360,62 @@ def create_evidence_router(
             ws_url=f"ws://localhost:{port}/ws/analysis/{run.run_id}",
             queue_position=run_manager.queue_position(run.run_id),
         )
+
+    @router.post("/api/evidence/pool", response_model=PoolResponse)
+    async def create_pool(request: PoolRequest) -> PoolResponse:
+        """Create an EvidencePool synchronously from text and/or document sources.
+
+        No LLM calls are made. Document ingestion (filesystem/HTTP I/O) is awaited
+        when evidence_sources are provided. Text is split into paragraphs.
+
+        The resulting EvidenceSession is immediately status="ready", so the
+        existing POST /api/evidence/{session_id}/analyze endpoint can be called
+        right after without waiting for a background gather task.
+
+        Item ID conventions (DEC-EVIDENCE-001, DEC-API-014):
+        - Document items: ``DOC-<n>`` with source="document"
+        - User text items: ``U-<n>`` with source="user"
+        """
+        session = evidence_manager.create_session()
+        session.name = request.name
+        session.evidence_sources = request.evidence_sources or None
+
+        doc_items: list[EvidenceItem] = []
+        user_items: list[EvidenceItem] = []
+
+        # 1. Ingest document sources (filesystem / HTTP I/O, no LLM)
+        if request.evidence_sources:
+            ingestion_result = await ingest_evidence(sources=request.evidence_sources)
+            for n, doc in enumerate(ingestion_result.documents, start=1):
+                doc_items.append(
+                    EvidenceItem(
+                        item_id=f"DOC-{n}",
+                        claim=doc.markdown.strip(),
+                        source="document",
+                        source_ids=[doc.source_name],
+                        category="fact",
+                        confidence="Medium",
+                        entities=[],
+                        verified=False,
+                        selected=True,
+                    )
+                )
+
+        # 2. Split user text into paragraph items
+        if request.evidence:
+            user_items = _split_to_user_items(request.evidence)
+
+        all_items = doc_items + user_items
+
+        pool = EvidencePool(
+            session_id=session.session_id,
+            question=request.question,
+            items=all_items,
+            status="ready",
+        )
+        session.pool = pool
+        session.status = "ready"
+
+        return PoolResponse(session_id=session.session_id, pool=pool)
 
     return router

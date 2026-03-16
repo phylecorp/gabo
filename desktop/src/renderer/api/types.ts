@@ -81,6 +81,7 @@ export interface RunSummary {
 export interface RunDetail extends RunSummary {
   artifacts: Artifact[]
   synthesis_path: string | null
+  evidence_path?: string | null
 }
 
 // ACH specific
@@ -236,7 +237,7 @@ export interface TestProviderResponse {
 export interface EvidenceItem {
   item_id: string
   claim: string
-  source: 'decomposition' | 'research' | 'user'
+  source: 'decomposition' | 'research' | 'user' | 'document'
   source_ids: string[]
   category: string
   confidence: 'High' | 'Medium' | 'Low'
@@ -285,6 +286,18 @@ export interface CuratedAnalysisRequest {
   report_enabled?: boolean
   report_format?: string
   evidence_sources?: string[]
+}
+
+export interface PoolRequest {
+  question: string
+  name?: string
+  evidence?: string
+  evidence_sources?: string[]
+}
+
+export interface PoolResponse {
+  session_id: string
+  pool: EvidencePool
 }
 
 // Evidence gathering progress state

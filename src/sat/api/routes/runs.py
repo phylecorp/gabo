@@ -46,6 +46,15 @@ report later. This endpoint calls generate_report(output_dir, fmt=fmt) on demand
 FileNotFoundError (missing manifest) maps to 400; run-not-found maps to 404. The
 endpoint is synchronous — report generation is fast (template rendering) and does
 not require a background task.
+
+@decision DEC-API-010
+@title GET /runs/{run_id}/evidence endpoint — retrieve persisted EvidencePool JSON
+@status accepted
+@rationale Curated-evidence analysis runs persist the EvidencePool as evidence.json
+in the run output directory. This endpoint reads and returns that file directly.
+Returns 404 for runs without evidence (legacy runs or non-curated runs). The
+endpoint reuses _find_output_dir() and returns raw bytes with application/json
+media type — same pattern as get_run_artifact().
 """
 
 from __future__ import annotations
@@ -100,6 +109,7 @@ def _manifest_to_detail(manifest: ArtifactManifest, status: str = "completed") -
         status=status,
         artifacts=[a.model_dump(mode="json") for a in manifest.artifacts],
         synthesis_path=manifest.synthesis_path,
+        evidence_path=manifest.evidence_path,
     )
 
 
@@ -362,6 +372,35 @@ def create_runs_router(manager: RunManager) -> APIRouter:
 
         return Response(
             content=artifact_path.read_bytes(),
+            media_type="application/json",
+        )
+
+    @router.get("/api/runs/{run_id}/evidence")
+    async def get_run_evidence(
+        run_id: str,
+        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+    ) -> Response:
+        """Return the persisted EvidencePool JSON for a run.
+
+        Reads evidence.json from the run's output directory. Returns 200 with the
+        EvidencePool JSON on success. Returns 404 if the run is not found or if
+        evidence.json does not exist (legacy runs or runs without curated evidence).
+        """
+        search_dir = Path(dir)
+
+        output_dir = _find_output_dir(manager, run_id, search_dir)
+        if not output_dir:
+            raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found")
+
+        evidence_file = output_dir / "evidence.json"
+        if not evidence_file.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"No evidence artifact found for run {run_id!r}",
+            )
+
+        return Response(
+            content=evidence_file.read_bytes(),
             media_type="application/json",
         )
 

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from sat.models.evidence import EvidencePool
+
 
 class AnalysisRequest(BaseModel):
     """Request body for POST /api/analysis."""
@@ -99,6 +101,7 @@ class RunDetail(RunSummary):
 
     artifacts: list[dict]
     synthesis_path: str | None = None
+    evidence_path: str | None = None
 
 
 class ProviderSettings(BaseModel):
@@ -106,6 +109,7 @@ class ProviderSettings(BaseModel):
 
     api_key: str = ""
     default_model: str = ""
+    research_model: str = ""
 
 
 class AppSettings(BaseModel):
@@ -120,6 +124,7 @@ class ProviderSettingsResponse(BaseModel):
     has_api_key: bool
     api_key_preview: str = ""
     default_model: str = ""
+    research_model: str = ""
     source: str = "default"  # "config_file", "environment", "default"
 
 
@@ -189,3 +194,27 @@ class CuratedAnalysisRequest(BaseModel):
     evidence_sources: list[str] | None = Field(
         default=None, description="File paths or URLs to ingest as evidence"
     )
+
+
+class PoolRequest(BaseModel):
+    """Request body for POST /api/evidence/pool.
+
+    Creates a structured EvidencePool synchronously from raw text and/or
+    document sources without any LLM calls. Allows the frontend to build
+    a reviewable pool from manually entered evidence or uploaded documents
+    before triggering the full analysis pipeline.
+    """
+
+    question: str
+    name: str | None = None
+    evidence: str | None = None  # raw text entered by user; split into paragraph items
+    evidence_sources: list[str] | None = Field(
+        default=None, description="File paths or URLs to ingest as evidence documents"
+    )
+
+
+class PoolResponse(BaseModel):
+    """Response for POST /api/evidence/pool."""
+
+    session_id: str
+    pool: EvidencePool

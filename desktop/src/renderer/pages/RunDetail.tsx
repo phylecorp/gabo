@@ -389,7 +389,18 @@ export default function RunDetail() {
           {run?.adversarial_enabled && (
             <IntelBadge label="adversarial" variant="default" />
           )}
-          {run?.evidence_provided && (
+          {run?.evidence_provided && run?.evidence_path && (
+            <button
+              type="button"
+              className="intel-badge badge-default"
+              style={{ cursor: 'pointer', background: 'none', border: '1px solid var(--color-border-subtle)', borderRadius: 4 }}
+              title="View evidence pool"
+              onClick={() => navigate(`/runs/${run.run_id}/evidence`)}
+            >
+              evidence
+            </button>
+          )}
+          {run?.evidence_provided && !run?.evidence_path && (
             <IntelBadge label="evidence" variant="default" />
           )}
           <button
@@ -502,7 +513,7 @@ export default function RunDetail() {
               <span className="run-detail-section-label text-xs text-muted">
                 RESEARCH PROVIDERS
               </span>
-              <div className="flex gap-2" style={{ flexWrap: 'wrap', marginTop: 6 }}>
+              <div className="run-detail-providers-list">
                 {Object.entries(liveProgress.researchProviders).map(([name, pStatus]) => (
                   <div key={name} className="provider-status-item">
                     <span className={`status-dot status-dot-${pStatus === 'completed' ? 'ok' : pStatus === 'failed' ? 'error' : 'warn'}`} />

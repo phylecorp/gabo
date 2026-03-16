@@ -18,6 +18,17 @@
  *   "Run Analysis" flow is preserved unchanged. Step state is local to this component;
  *   the useEvidenceGathering hook owns WS lifecycle and pool curation.
  *
+ * @decision DEC-DESKTOP-NEW-ANALYSIS-POOL-001
+ * @title "Run Analysis" routes through evidence review when evidence text or sources are present
+ * @status accepted
+ * @rationale When the user provides evidence (text or document sources) and clicks "Run
+ *   Analysis", the app calls POST /api/evidence/pool to create a real EvidenceSession on
+ *   the backend synchronously (no WebSocket), then shows the EvidenceReview step before
+ *   running analysis via the curated path. This ensures evidence is always reviewed before
+ *   analysis when the user has supplied it. The zero-evidence quick path (question-only with
+ *   research) continues to call startAnalysis() directly. The "Gather & Review Evidence"
+ *   button path is unchanged.
+ *
  * @decision DEC-UPLOAD-004
  * @title SourceInput placed below evidence textarea; sources passed to both submit paths
  * @status accepted
@@ -61,6 +72,7 @@ export default function NewAnalysis() {
   const { data: concurrency } = useConcurrencyStatus()
   const {
     gatherEvidence,
+    setPrebuiltPool,
     progress: gatherProgress,
     evidencePool,
     sessionId: evidenceSessionId,
@@ -93,10 +105,13 @@ export default function NewAnalysis() {
   // Source documents (file paths and URLs)
   const [sources, setSources] = useState<string[]>([])
 
+  // Advanced section visibility
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+
   // Advanced toggles
-  const [researchEnabled, setResearchEnabled] = useState(false)
+  const [researchEnabled, setResearchEnabled] = useState(true)
   const [researchMode, setResearchMode] = useState<'multi' | 'single'>('multi')
-  const [adversarialEnabled, setAdversarialEnabled] = useState(prefill?.adversarialEnabled ?? false)
+  const [adversarialEnabled, setAdversarialEnabled] = useState(prefill?.adversarialEnabled ?? true)
   const [adversarialMode, setAdversarialMode] = useState<'dual' | 'trident'>('dual')
   const [adversarialRounds, setAdversarialRounds] = useState(1)
   const [reportEnabled, setReportEnabled] = useState(true)
@@ -105,6 +120,12 @@ export default function NewAnalysis() {
   const [error, setError] = useState<string | null>(null)
 
   const effectiveProvider = provider || defaultProvider
+
+  // Resolve the model to send in requests: manual override wins, then the
+  // provider's saved default_model (which the backend returns from config.json),
+  // then null (backend will apply its own fallback chain).
+  const selectedProviderInfo = providers.find(p => p.name === effectiveProvider)
+  const effectiveModel = modelOverride.trim() || selectedProviderInfo?.default_model || null
 
   const canSubmit = question.trim().length > 0 && !submitting
   const canGather = question.trim().length > 0 && !submitting && (evidence.trim().length > 0 || researchEnabled)
@@ -131,28 +152,52 @@ export default function NewAnalysis() {
     }
   }, [step, gatherProgress.status, gatherProgress.error])
 
-  // --- Direct single-shot analysis ---
+  // --- Direct single-shot analysis (or routes to review when evidence present) ---
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!canSubmit) return
     setError(null)
     setSubmitting(true)
 
+    const hasEvidence = evidence.trim().length > 0 || sources.length > 0
+
+    // When evidence text or document sources are present, create an EvidencePool
+    // on the backend and show the review step before running analysis (DEC-DESKTOP-NEW-ANALYSIS-POOL-001).
+    if (hasEvidence && baseUrl) {
+      try {
+        const client = new SatClient(baseUrl)
+        const { session_id, pool } = await client.createEvidencePool({
+          question: question.trim(),
+          name: name.trim() || undefined,
+          evidence: evidence.trim() || undefined,
+          evidence_sources: sources.length > 0 ? sources : undefined,
+        })
+        setPrebuiltPool(pool, session_id)
+        setStep('review')
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to create evidence pool')
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
+    // Zero-evidence quick path: question-only with research → run analysis directly.
     try {
       const runId = await startAnalysis({
         question: question.trim(),
         name: name.trim() || null,
-        evidence: evidence.trim() || null,
+        evidence: null,
         techniques: selectedTechniques.length > 0 ? selectedTechniques : null,
         provider: effectiveProvider || undefined,
-        model: modelOverride.trim() || null,
+        model: effectiveModel,
         research_enabled: researchEnabled,
         research_mode: researchEnabled ? researchMode : undefined,
         adversarial_enabled: adversarialEnabled,
         adversarial_mode: adversarialEnabled ? adversarialMode : undefined,
         adversarial_rounds: adversarialEnabled ? adversarialRounds : undefined,
         report_enabled: reportEnabled,
-        evidence_sources: sources.length > 0 ? sources : undefined,
+        evidence_sources: undefined,
       })
 
       if (runId) {
@@ -181,7 +226,7 @@ export default function NewAnalysis() {
         research_enabled: researchEnabled,
         research_mode: researchEnabled ? researchMode : undefined,
         provider: effectiveProvider || undefined,
-        model: modelOverride.trim() || null,
+        model: effectiveModel,
         evidence_sources: sources.length > 0 ? sources : undefined,
       })
       setStep('gathering')
@@ -207,7 +252,7 @@ export default function NewAnalysis() {
         name: name.trim() || null,
         techniques: selectedTechniques.length > 0 ? selectedTechniques : null,
         provider: effectiveProvider || undefined,
-        model: modelOverride.trim() || null,
+        model: effectiveModel,
         adversarial_enabled: adversarialEnabled,
         adversarial_mode: adversarialEnabled ? adversarialMode : undefined,
         adversarial_rounds: adversarialEnabled ? adversarialRounds : undefined,
@@ -259,7 +304,7 @@ export default function NewAnalysis() {
           </span>
         </div>
         {error && (
-          <div className="form-error" style={{ marginBottom: 16 }}>
+          <div className="form-error form-error-spaced">
             <span className="intel-badge badge-red">Error</span>
             <span className="text-sm text-secondary">{error}</span>
           </div>
@@ -351,9 +396,9 @@ export default function NewAnalysis() {
 
         {/* Source Documents */}
         <div className="form-section">
-          <label className="form-label text-xs text-muted">SOURCE DOCUMENTS</label>
+          <label className="form-label">Source Documents</label>
           <SourceInput sources={sources} onChange={setSources} disabled={submitting} />
-          <span className="text-xs text-muted" style={{ marginTop: 4, display: 'block' }}>
+          <span className="text-xs text-muted form-hint">
             Add files or URLs to ingest as evidence. Supports PDF, DOCX, HTML, images, and more.
           </span>
         </div>
@@ -370,128 +415,136 @@ export default function NewAnalysis() {
           </div>
         )}
 
-        {/* Provider */}
-        {providers.length > 0 && (
-          <div className="form-section">
-            <ProviderConfig
-              providers={providers}
-              selected={effectiveProvider}
-              onSelect={setProvider}
-              model={modelOverride}
-              onModelChange={setModelOverride}
-              disabled={submitting}
-            />
-          </div>
-        )}
-
         {/* Advanced options */}
         <div className="form-section form-section-advanced">
-          <div className="form-advanced-header">
+          <div
+            className="form-advanced-header form-advanced-header-toggle"
+            onClick={() => setAdvancedOpen(o => !o)}
+          >
             <span className="form-label">Advanced Options</span>
+            <span className="form-advanced-chevron" aria-hidden="true">
+              {advancedOpen ? '▾' : '▸'}
+            </span>
           </div>
 
-          {/* Research */}
-          <div className="form-toggle-row">
-            <label className="form-toggle-label">
-              <input
-                type="checkbox"
-                checked={researchEnabled}
-                onChange={e => setResearchEnabled(e.target.checked)}
-                disabled={submitting}
-                className="form-checkbox"
-              />
-              <span className="form-toggle-name">Web Research</span>
-              <span className="form-toggle-desc text-muted text-xs">
-                Query external research providers for current intelligence
-              </span>
-            </label>
-            {researchEnabled && (
-              <div className="form-toggle-sub">
-                <label className="form-sub-label">Mode</label>
-                <div className="form-radio-row">
-                  {(['multi', 'single'] as const).map(m => (
-                    <label key={m} className="form-radio-label">
-                      <input
-                        type="radio"
-                        name="researchMode"
-                        value={m}
-                        checked={researchMode === m}
-                        onChange={() => setResearchMode(m)}
-                        disabled={submitting}
-                      />
-                      <span className="text-sm">{m}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          {advancedOpen && (
+            <>
+              {/* LLM Provider */}
+              {providers.length > 0 && (
+                <ProviderConfig
+                  providers={providers}
+                  selected={effectiveProvider}
+                  onSelect={setProvider}
+                  model={modelOverride}
+                  onModelChange={setModelOverride}
+                  disabled={submitting}
+                />
+              )}
 
-          {/* Adversarial */}
-          <div className="form-toggle-row">
-            <label className="form-toggle-label">
-              <input
-                type="checkbox"
-                checked={adversarialEnabled}
-                onChange={e => setAdversarialEnabled(e.target.checked)}
-                disabled={submitting}
-                className="form-checkbox"
-              />
-              <span className="form-toggle-name">Adversarial Review</span>
-              <span className="form-toggle-desc text-muted text-xs">
-                Apply devil's advocate critique and rebuttal to each technique result
-              </span>
-            </label>
-            {adversarialEnabled && (
-              <div className="form-toggle-sub">
-                <div className="form-radio-row">
-                  <label className="form-sub-label">Mode</label>
-                  {(['dual', 'trident'] as const).map(m => (
-                    <label key={m} className="form-radio-label">
-                      <input
-                        type="radio"
-                        name="adversarialMode"
-                        value={m}
-                        checked={adversarialMode === m}
-                        onChange={() => setAdversarialMode(m)}
-                        disabled={submitting}
-                      />
-                      <span className="text-sm">{m}</span>
-                    </label>
-                  ))}
-                </div>
-                <div className="form-radio-row" style={{ marginTop: 8 }}>
-                  <label className="form-sub-label">Rounds</label>
+              {/* Research */}
+              <div className="form-toggle-row">
+                <label className="form-toggle-label">
                   <input
-                    type="number"
-                    min={1}
-                    max={5}
-                    value={adversarialRounds}
-                    onChange={e => setAdversarialRounds(Number(e.target.value))}
+                    type="checkbox"
+                    checked={researchEnabled}
+                    onChange={e => setResearchEnabled(e.target.checked)}
                     disabled={submitting}
-                    className="form-number-input"
+                    className="form-checkbox"
                   />
-                </div>
+                  <span className="form-toggle-name">Web Research</span>
+                  <span className="form-toggle-desc text-muted text-xs">
+                    Query external research providers for current intelligence
+                  </span>
+                </label>
+                {researchEnabled && (
+                  <div className="form-toggle-sub">
+                    <label className="form-sub-label">Mode</label>
+                    <div className="form-radio-row">
+                      {(['multi', 'single'] as const).map(m => (
+                        <label key={m} className="form-radio-label">
+                          <input
+                            type="radio"
+                            name="researchMode"
+                            value={m}
+                            checked={researchMode === m}
+                            onChange={() => setResearchMode(m)}
+                            disabled={submitting}
+                          />
+                          <span className="text-sm">{m}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Report */}
-          <div className="form-toggle-row">
-            <label className="form-toggle-label">
-              <input
-                type="checkbox"
-                checked={reportEnabled}
-                onChange={e => setReportEnabled(e.target.checked)}
-                disabled={submitting}
-                className="form-checkbox"
-              />
-              <span className="form-toggle-name">Generate Report</span>
-              <span className="form-toggle-desc text-muted text-xs">
-                Produce a formatted intelligence report on completion
-              </span>
-            </label>
-          </div>
+              {/* Adversarial */}
+              <div className="form-toggle-row">
+                <label className="form-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={adversarialEnabled}
+                    onChange={e => setAdversarialEnabled(e.target.checked)}
+                    disabled={submitting}
+                    className="form-checkbox"
+                  />
+                  <span className="form-toggle-name">Adversarial Review</span>
+                  <span className="form-toggle-desc text-muted text-xs">
+                    Apply devil's advocate critique and rebuttal to each technique result
+                  </span>
+                </label>
+                {adversarialEnabled && (
+                  <div className="form-toggle-sub">
+                    <div className="form-radio-row">
+                      <label className="form-sub-label">Mode</label>
+                      {(['dual', 'trident'] as const).map(m => (
+                        <label key={m} className="form-radio-label">
+                          <input
+                            type="radio"
+                            name="adversarialMode"
+                            value={m}
+                            checked={adversarialMode === m}
+                            onChange={() => setAdversarialMode(m)}
+                            disabled={submitting}
+                          />
+                          <span className="text-sm">{m}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="form-radio-row-nested">
+                      <label className="form-sub-label">Rounds</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={5}
+                        value={adversarialRounds}
+                        onChange={e => setAdversarialRounds(Number(e.target.value))}
+                        disabled={submitting}
+                        className="form-number-input"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Report */}
+              <div className="form-toggle-row">
+                <label className="form-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={reportEnabled}
+                    onChange={e => setReportEnabled(e.target.checked)}
+                    disabled={submitting}
+                    className="form-checkbox"
+                  />
+                  <span className="form-toggle-name">Generate Report</span>
+                  <span className="form-toggle-desc text-muted text-xs">
+                    Produce a formatted intelligence report on completion
+                  </span>
+                </label>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Error display */}
@@ -504,28 +557,23 @@ export default function NewAnalysis() {
 
         {/* Submit actions */}
         <div className="form-actions">
-          <div className="form-action-group">
-            <button
-              type="submit"
-              className={`btn-primary btn-lg ${!canSubmit ? 'btn-disabled' : ''}`}
-              disabled={!canSubmit}
-            >
-              {submitting ? 'Starting analysis...' : 'Run Analysis'}
-            </button>
-            <span className="form-submit-desc text-muted text-xs">Full pipeline: evidence → techniques → synthesis</span>
-          </div>
-          <div className="form-action-group">
-            <button
-              type="button"
-              className={`btn-primary btn-lg${canGather ? '' : ' btn-disabled'}`}
-              style={{ background: 'rgba(34,211,238,0.1)', borderColor: 'var(--color-signal-cyan)', color: 'var(--color-signal-cyan)' }}
-              disabled={!canGather}
-              onClick={handleGather}
-            >
-              Gather &amp; Review Evidence
-            </button>
-            <span className="form-submit-desc text-muted text-xs">Collect and curate evidence before running techniques</span>
-          </div>
+          <button
+            type="submit"
+            className={`btn-primary btn-lg ${!canSubmit ? 'btn-disabled' : ''}`}
+            disabled={!canSubmit}
+            title={!canSubmit ? (submitting ? 'Analysis already running' : 'Enter an intelligence question to continue') : 'Full pipeline: evidence → techniques → synthesis'}
+          >
+            {submitting ? 'Starting analysis...' : 'Run Analysis'}
+          </button>
+          <button
+            type="button"
+            className={`btn-primary btn-lg btn-gather${canGather ? '' : ' btn-disabled'}`}
+            disabled={!canGather}
+            onClick={handleGather}
+            title={!canGather ? (submitting ? 'Analysis already running' : 'Enter an intelligence question to continue') : 'Collect and curate evidence before running techniques'}
+          >
+            Gather &amp; Review Evidence
+          </button>
           {question.trim().length === 0 && (
             <span className="form-submit-hint text-muted text-xs">
               Enter an intelligence question to continue

@@ -28,6 +28,7 @@ export default function QuestionInput({ value, onChange, disabled = false }: Que
         disabled={disabled}
         rows={4}
         autoFocus
+        aria-required="true"
       />
       <div className="question-input-meta">
         <span className="question-input-hint">

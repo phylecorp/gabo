@@ -14,6 +14,15 @@
  *   state. Selection mutations are local-only (no server round-trip needed).
  *   State now lives in EvidenceGatheringProvider (evidenceContext.tsx) so it persists
  *   across page navigation — the user can navigate away mid-gather and return to see results.
+ *
+ * @decision DEC-DESKTOP-HOOK-EVIDENCE-002
+ * @title setPrebuiltPool: bypass WS gather flow for direct pool injection
+ * @status accepted
+ * @rationale When "Run Analysis" is clicked with evidence present, the frontend calls
+ *   POST /api/evidence/pool which returns a pre-built EvidencePool synchronously (no WS).
+ *   The SET_PREBUILT_POOL action injects that pool + sessionId directly into the reducer
+ *   state (status=ready), so EvidenceReview renders immediately. The existing gather flow
+ *   (WebSocket) is unchanged — this is an additive path for the "Run Analysis" button.
  */
 import { createContext, useContext, useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { useApiContext } from './context'
@@ -45,6 +54,7 @@ type Action =
   | { type: 'CONNECTING' }
   | { type: 'EVENT'; event: PipelineEventMessage }
   | { type: 'POOL_READY'; pool: EvidencePool }
+  | { type: 'SET_PREBUILT_POOL'; pool: EvidencePool; sessionId: string }
   | { type: 'TOGGLE_ITEM'; itemId: string }
   | { type: 'SELECT_ALL' }
   | { type: 'DESELECT_ALL' }
@@ -162,6 +172,15 @@ function reducer(state: EvidenceState, action: Action): EvidenceState {
         progress: { ...state.progress, status: 'ready' },
       }
 
+    // Injected directly from POST /api/evidence/pool — no WS gather flow needed.
+    case 'SET_PREBUILT_POOL':
+      return {
+        ...state,
+        pool: action.pool,
+        sessionId: action.sessionId,
+        progress: { ...initialProgress, status: 'ready' },
+      }
+
     case 'FAILED':
       return {
         ...state,
@@ -245,13 +264,15 @@ function reducer(state: EvidenceState, action: Action): EvidenceState {
 
 interface EvidenceGatheringContextValue {
   gatherEvidence: (request: EvidenceGatherRequest) => Promise<void>
+  /** Inject a pre-built pool (from POST /api/evidence/pool) directly, skipping the WS gather flow. */
+  setPrebuiltPool: (pool: EvidencePool, sessionId: string) => void
   progress: EvidenceGatheringProgress
   evidencePool: EvidencePool | null
   sessionId: string | null
   toggleItem: (itemId: string) => void
   selectAll: () => void
   deselectAll: () => void
-  selectByFilter: (filter: 'high-confidence' | 'research' | 'decomposition' | 'user') => void
+  selectByFilter: (filter: 'high-confidence' | 'research' | 'decomposition' | 'user' | 'document') => void
   selectedItems: EvidenceItem[]
   selectedCount: number
   totalCount: number
@@ -323,11 +344,15 @@ export function EvidenceGatheringProvider({ children }: { children: ReactNode })
   }, [])
 
   const selectByFilter = useCallback(
-    (filter: 'high-confidence' | 'research' | 'decomposition' | 'user') => {
+    (filter: 'high-confidence' | 'research' | 'decomposition' | 'user' | 'document') => {
       dispatch({ type: 'SELECT_BY_FILTER', filter })
     },
     []
   )
+
+  const setPrebuiltPool = useCallback((pool: EvidencePool, sessionId: string) => {
+    dispatch({ type: 'SET_PREBUILT_POOL', pool, sessionId })
+  }, [])
 
   const reset = useCallback(() => {
     wsRef.current?.disconnect()
@@ -349,6 +374,7 @@ export function EvidenceGatheringProvider({ children }: { children: ReactNode })
 
   const value: EvidenceGatheringContextValue = {
     gatherEvidence,
+    setPrebuiltPool,
     progress: state.progress,
     evidencePool: state.pool,
     sessionId: state.sessionId,

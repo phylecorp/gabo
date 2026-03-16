@@ -6,6 +6,15 @@
 @rationale Uses sonar-deep-research for comprehensive multi-step research with
 inline citations. OpenAI-compatible API means we reuse the openai SDK. Priority
 backend when PERPLEXITY_API_KEY is available.
+
+@decision DEC-RESEARCH-011
+@title Model resolution via resolve_research_model() for config-driven overrides
+@status accepted
+@rationale The default model now comes from resolve_research_model("perplexity")
+rather than a hardcoded string. This allows users to set a preferred model in
+~/.sat/config.json (research_model field) or the PERPLEXITY_RESEARCH_MODEL env
+var without needing to modify code. Explicit constructor param still takes
+priority, preserving existing programmatic use.
 """
 
 from __future__ import annotations
@@ -15,6 +24,7 @@ import os
 
 import openai
 
+from sat.config import resolve_research_model
 from sat.research.base import ResearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -26,13 +36,14 @@ class PerplexityProvider:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "sonar-deep-research",
+        model: str | None = None,
     ) -> None:
         key = api_key or os.environ.get("PERPLEXITY_API_KEY")
         if not key:
             raise ValueError("No Perplexity API key. Set PERPLEXITY_API_KEY or pass api_key.")
         self._client = openai.AsyncOpenAI(api_key=key, base_url="https://api.perplexity.ai")
-        self._model = model
+        # Resolution: explicit param > config file > env var > hardcoded default
+        self._model = model or resolve_research_model("perplexity")
 
     async def research(
         self,

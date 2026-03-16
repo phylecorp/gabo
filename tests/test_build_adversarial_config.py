@@ -45,8 +45,9 @@ class TestBuildAdversarialConfigDualMode:
     def test_mode_is_dual_when_no_investigator(self):
         """Mode is 'dual' when only one challenger provider is available."""
         env = {"OPENAI_API_KEY": "sk-test"}
-        with patch.dict(os.environ, env, clear=True):
-            cfg = build_adversarial_config(provider="anthropic")
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict(os.environ, env, clear=True):
+                cfg = build_adversarial_config(provider="anthropic")
         assert cfg.mode == "dual"
         assert "investigator" not in cfg.providers
 
@@ -76,23 +77,26 @@ class TestBuildAdversarialConfigSelfCritiqueFallback:
 
     def test_self_critique_when_no_challenger(self):
         """Primary provider is also used as challenger in self-critique mode."""
-        with patch.dict(os.environ, {}, clear=True):
-            cfg = build_adversarial_config(provider="anthropic")
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict(os.environ, {}, clear=True):
+                cfg = build_adversarial_config(provider="anthropic")
         assert cfg.providers["primary"].provider == "anthropic"
         assert cfg.providers["challenger"].provider == "anthropic"
 
     def test_self_critique_roles_still_populated(self):
         """RoleAssignment is still present in self-critique fallback."""
-        with patch.dict(os.environ, {}, clear=True):
-            cfg = build_adversarial_config(provider="anthropic")
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict(os.environ, {}, clear=True):
+                cfg = build_adversarial_config(provider="anthropic")
         assert cfg.roles is not None
         assert cfg.roles.primary == "primary"
         assert cfg.roles.challenger == "challenger"
 
     def test_self_critique_mode_is_dual(self):
         """Mode is 'dual' in self-critique — no investigator available."""
-        with patch.dict(os.environ, {}, clear=True):
-            cfg = build_adversarial_config(provider="anthropic")
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict(os.environ, {}, clear=True):
+                cfg = build_adversarial_config(provider="anthropic")
         assert cfg.mode == "dual"
 
 

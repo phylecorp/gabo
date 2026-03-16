@@ -26,6 +26,18 @@ provider's API. We send a minimal "Say hello" prompt and treat any successful
 response as proof the key works. Unknown providers return success=False with
 a clear error message rather than 422, since the frontend needs a JSON response
 to display to the user.
+
+@decision DEC-API-011
+@title Brave and Perplexity are "research providers" — no default model, different test path
+@status accepted
+@rationale Brave Search uses a plain HTTP subscription-token API (not an LLM at all).
+Perplexity uses an OpenAI-compatible API with a fixed model (sonar-deep-research).
+Both need API key management through the Settings UI, so they are added to
+_KNOWN_PROVIDERS and _PROVIDER_KEY_ENVS. The test-provider endpoint uses httpx
+for Brave (a simple GET to confirm the subscription token works) and the openai
+SDK with base_url=https://api.perplexity.ai for Perplexity. The frontend hides
+the "Default Model" field for Brave since the concept doesn't apply; Perplexity
+keeps the model field since users may want to use a different sonar variant.
 """
 
 from __future__ import annotations
@@ -54,12 +66,14 @@ _PROVIDER_KEY_ENVS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     "gemini": "GEMINI_API_KEY",
+    "perplexity": "PERPLEXITY_API_KEY",
+    "brave": "BRAVE_API_KEY",
 }
 
 # Some users set GOOGLE_API_KEY instead of GEMINI_API_KEY
 _GEMINI_ALT_KEY = "GOOGLE_API_KEY"
 
-_KNOWN_PROVIDERS = ["anthropic", "openai", "gemini"]
+_KNOWN_PROVIDERS = ["anthropic", "openai", "gemini", "perplexity", "brave"]
 
 
 def _get_config_path() -> Path:
@@ -101,6 +115,9 @@ def _load_settings(config_path: Path) -> SettingsResponse:
         file_entry = file_providers.get(name, {})
         file_key = file_entry.get("api_key", "") if isinstance(file_entry, dict) else ""
         file_model = file_entry.get("default_model", "") if isinstance(file_entry, dict) else ""
+        file_research_model = (
+            file_entry.get("research_model", "") if isinstance(file_entry, dict) else ""
+        )
 
         env_var = _PROVIDER_KEY_ENVS.get(name, f"{name.upper()}_API_KEY")
         env_key = os.environ.get(env_var, "")
@@ -129,6 +146,7 @@ def _load_settings(config_path: Path) -> SettingsResponse:
             has_api_key=has_key,
             api_key_preview=preview,
             default_model=model,
+            research_model=file_research_model,
             source=source,
         )
 
@@ -140,7 +158,11 @@ def _save_config(settings: AppSettings, config_path: Path) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "providers": {
-            name: {"api_key": ps.api_key, "default_model": ps.default_model}
+            name: {
+                "api_key": ps.api_key,
+                "default_model": ps.default_model,
+                "research_model": ps.research_model,
+            }
             for name, ps in settings.providers.items()
         }
     }
@@ -209,6 +231,36 @@ async def _test_provider_connection(req: TestProviderRequest) -> TestProviderRes
             gmodel.generate_content("Say hello")
             return TestProviderResponse(success=True, model_used=model)
 
+        elif provider == "perplexity":
+            # Perplexity exposes an OpenAI-compatible API at api.perplexity.ai.
+            # We use the `sonar` model (lightweight) for the connectivity check;
+            # sonar-deep-research is the production model but costs more per call.
+            import openai
+
+            pc = openai.OpenAI(api_key=req.api_key, base_url="https://api.perplexity.ai")
+            pc.chat.completions.create(
+                model="sonar",
+                messages=[{"role": "user", "content": "Say hello"}],
+                max_tokens=16,
+            )
+            return TestProviderResponse(success=True, model_used="sonar")
+
+        elif provider == "brave":
+            # Brave Search API uses a simple HTTP token header — no SDK needed.
+            # A minimal web search with count=1 verifies the subscription token.
+            import httpx
+
+            resp = httpx.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers={
+                    "X-Subscription-Token": req.api_key,
+                    "Accept": "application/json",
+                },
+                params={"q": "test", "count": 1},
+            )
+            resp.raise_for_status()
+            return TestProviderResponse(success=True, model_used="brave-search")
+
     except Exception as exc:  # noqa: BLE001
         return TestProviderResponse(success=False, error=str(exc))
 
@@ -240,6 +292,7 @@ async def list_providers() -> list[ProviderInfo]:
     for name in _KNOWN_PROVIDERS:
         file_entry = file_providers.get(name, {})
         file_key = file_entry.get("api_key", "") if isinstance(file_entry, dict) else ""
+        file_model = file_entry.get("default_model", "") if isinstance(file_entry, dict) else ""
 
         if file_key:
             has_key = True
@@ -249,11 +302,15 @@ async def list_providers() -> list[ProviderInfo]:
             if name == "gemini" and not has_key:
                 has_key = bool(os.environ.get(_GEMINI_ALT_KEY))
 
+        # Use user-saved model if present, otherwise fall back to hardcoded default.
+        # This ensures the Settings page model choice is reflected here.
+        resolved_model = file_model or DEFAULT_MODELS.get(name, "")
+
         providers.append(
             ProviderInfo(
                 name=name,
                 has_api_key=has_key,
-                default_model=DEFAULT_MODELS.get(name, ""),
+                default_model=resolved_model,
             )
         )
 
@@ -289,13 +346,18 @@ async def update_settings(settings: AppSettings) -> SettingsResponse:
     # Merge: incoming providers overwrite existing ones
     existing_providers: dict = existing.get("providers", {})
     for name, ps in settings.providers.items():
-        existing_providers[name] = {"api_key": ps.api_key, "default_model": ps.default_model}
+        existing_providers[name] = {
+            "api_key": ps.api_key,
+            "default_model": ps.default_model,
+            "research_model": ps.research_model,
+        }
 
     merged = AppSettings(
         providers={
             name: ProviderSettings(
                 api_key=v.get("api_key", "") if isinstance(v, dict) else "",
                 default_model=v.get("default_model", "") if isinstance(v, dict) else "",
+                research_model=v.get("research_model", "") if isinstance(v, dict) else "",
             )
             for name, v in existing_providers.items()
         }

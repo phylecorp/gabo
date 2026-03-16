@@ -20,6 +20,10 @@ interface SourceInputProps {
 export default function SourceInput({ sources, onChange, disabled }: SourceInputProps) {
   const [urlInput, setUrlInput] = useState('')
 
+  // Show validation hint when the user has typed something that doesn't look like a URL
+  const urlTrimmed = urlInput.trim()
+  const showUrlError = urlTrimmed.length > 0 && !urlTrimmed.startsWith('http://') && !urlTrimmed.startsWith('https://')
+
   const addFiles = async () => {
     if (!window.satAPI) return
     const paths = await window.satAPI.openFileDialog()
@@ -91,6 +95,11 @@ export default function SourceInput({ sources, onChange, disabled }: SourceInput
             + Add URL
           </button>
         </div>
+        {showUrlError && (
+          <span className="source-input-url-error">
+            Enter a valid http:// or https:// URL
+          </span>
+        )}
       </div>
 
       {sources.length > 0 && (

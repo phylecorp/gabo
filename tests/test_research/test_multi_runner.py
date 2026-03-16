@@ -12,6 +12,8 @@ availability. The core logic (merge, parallel gather, fallback) is tested direct
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -108,11 +110,22 @@ class MockLLMProvider:
         )
 
 
-class TestDiscoverProviders:
-    """Test provider discovery logic."""
+def _no_config_file(tmp_path: Path) -> Path:
+    """Return a path to a non-existent config file for test isolation."""
+    return tmp_path / "no_config.json"
 
-    def test_discover_providers_finds_available(self):
+
+class TestDiscoverProviders:
+    """Test provider discovery logic.
+
+    Each test patches both os.environ (clear=True) AND the config file path
+    to a non-existent file so that neither source leaks keys from the real
+    developer environment.
+    """
+
+    def test_discover_providers_finds_available(self, tmp_path):
         """Should discover all providers when all API keys are set."""
+        no_cfg = _no_config_file(tmp_path)
         with patch.dict(
             "os.environ",
             {
@@ -122,41 +135,47 @@ class TestDiscoverProviders:
             },
             clear=True,
         ):
-            providers = discover_providers()
-            names = [name for name, _ in providers]
-            assert "openai_deep" in names
-            assert "perplexity" in names
-            assert "gemini_deep" in names
-            assert len(providers) == 3
+            with patch("sat.config._get_sat_config_path", return_value=no_cfg):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "openai_deep" in names
+        assert "perplexity" in names
+        assert "gemini_deep" in names
+        assert len(providers) == 3
 
-    def test_discover_providers_skips_missing_keys(self):
+    def test_discover_providers_skips_missing_keys(self, tmp_path):
         """Should only discover providers with valid API keys."""
+        no_cfg = _no_config_file(tmp_path)
         with patch.dict(
             "os.environ",
             {"OPENAI_API_KEY": "test-openai"},
             clear=True,
         ):
-            providers = discover_providers()
-            names = [name for name, _ in providers]
-            assert "openai_deep" in names
-            assert "perplexity" not in names
-            assert "gemini_deep" not in names
-            assert len(providers) == 1
+            with patch("sat.config._get_sat_config_path", return_value=no_cfg):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "openai_deep" in names
+        assert "perplexity" not in names
+        assert "gemini_deep" not in names
+        assert len(providers) == 1
 
-    def test_discover_providers_includes_brave_alone(self):
+    def test_discover_providers_includes_brave_alone(self, tmp_path):
         """Should include Brave when only Brave API key is set (no deep providers)."""
+        no_cfg = _no_config_file(tmp_path)
         with patch.dict(
             "os.environ",
             {"BRAVE_API_KEY": "test-brave"},
             clear=True,
         ):
-            providers = discover_providers()
-            names = [name for name, _ in providers]
-            assert "brave" in names
-            assert len(providers) == 1
+            with patch("sat.config._get_sat_config_path", return_value=no_cfg):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "brave" in names
+        assert len(providers) == 1
 
-    def test_discover_providers_includes_brave_alongside_deep(self):
+    def test_discover_providers_includes_brave_alongside_deep(self, tmp_path):
         """Should include Brave alongside deep research providers when all keys are set."""
+        no_cfg = _no_config_file(tmp_path)
         with patch.dict(
             "os.environ",
             {
@@ -165,26 +184,129 @@ class TestDiscoverProviders:
             },
             clear=True,
         ):
-            providers = discover_providers()
-            names = [name for name, _ in providers]
-            assert "openai_deep" in names
-            assert "brave" in names
-            assert len(providers) == 2
+            with patch("sat.config._get_sat_config_path", return_value=no_cfg):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "openai_deep" in names
+        assert "brave" in names
+        assert len(providers) == 2
 
-    def test_discover_providers_falls_back_to_llm(self):
+    def test_discover_providers_falls_back_to_llm(self, tmp_path):
         """Should fall back to LLM if no other providers available."""
+        no_cfg = _no_config_file(tmp_path)
         with patch.dict("os.environ", {}, clear=True):
-            mock_llm = MockLLMProvider()
-            providers = discover_providers(llm_provider=mock_llm)
-            names = [name for name, _ in providers]
-            assert "llm" in names
-            assert len(providers) == 1
+            with patch("sat.config._get_sat_config_path", return_value=no_cfg):
+                mock_llm = MockLLMProvider()
+                providers = discover_providers(llm_provider=mock_llm)
+        names = [name for name, _ in providers]
+        assert "llm" in names
+        assert len(providers) == 1
 
-    def test_discover_providers_returns_empty_when_nothing(self):
+    def test_discover_providers_returns_empty_when_nothing(self, tmp_path):
         """Should return empty list when no providers available."""
+        no_cfg = _no_config_file(tmp_path)
         with patch.dict("os.environ", {}, clear=True):
-            providers = discover_providers(llm_provider=None)
-            assert providers == []
+            with patch("sat.config._get_sat_config_path", return_value=no_cfg):
+                providers = discover_providers(llm_provider=None)
+        assert providers == []
+
+
+class TestDiscoverProvidersConfigFile:
+    """Test that discover_providers reads API keys from ~/.sat/config.json.
+
+    This covers the bug where research providers only checked os.environ,
+    not the config file populated by the Settings UI.
+    """
+
+    def _make_config(self, tmp_path: Path, entries: dict) -> Path:
+        """Write a minimal config.json with the given provider entries."""
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"providers": entries}))
+        return config_file
+
+    def test_openai_key_from_config_file(self, tmp_path):
+        """OpenAI deep research provider discovered via config file key."""
+        config_file = self._make_config(
+            tmp_path, {"openai": {"api_key": "cfg-openai-key", "default_model": ""}}
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "openai_deep" in names
+
+    def test_perplexity_key_from_config_file(self, tmp_path):
+        """Perplexity provider discovered via config file key."""
+        config_file = self._make_config(
+            tmp_path, {"perplexity": {"api_key": "cfg-perplexity-key", "default_model": ""}}
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "perplexity" in names
+
+    def test_gemini_key_from_config_file(self, tmp_path):
+        """Gemini deep research provider discovered via config file key."""
+        config_file = self._make_config(
+            tmp_path, {"gemini": {"api_key": "cfg-gemini-key", "default_model": ""}}
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "gemini_deep" in names
+
+    def test_brave_key_from_config_file(self, tmp_path):
+        """Brave provider discovered via config file key."""
+        config_file = self._make_config(
+            tmp_path, {"brave": {"api_key": "cfg-brave-key", "default_model": ""}}
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "brave" in names
+
+    def test_env_var_takes_precedence_over_config(self, tmp_path):
+        """When both env var and config file have a key, env var is used (both work)."""
+        config_file = self._make_config(
+            tmp_path, {"openai": {"api_key": "cfg-openai-key", "default_model": ""}}
+        )
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "env-openai-key"}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "openai_deep" in names
+
+    def test_all_providers_from_config_file(self, tmp_path):
+        """All four providers discovered when all keys are in config file."""
+        config_file = self._make_config(
+            tmp_path,
+            {
+                "openai": {"api_key": "cfg-openai", "default_model": ""},
+                "perplexity": {"api_key": "cfg-perplexity", "default_model": ""},
+                "gemini": {"api_key": "cfg-gemini", "default_model": ""},
+                "brave": {"api_key": "cfg-brave", "default_model": ""},
+            },
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "openai_deep" in names
+        assert "perplexity" in names
+        assert "gemini_deep" in names
+        assert "brave" in names
+        assert len(providers) == 4
+
+    def test_missing_config_file_falls_back_to_no_providers(self, tmp_path):
+        """No config file + no env vars = no providers (unchanged behavior)."""
+        nonexistent = tmp_path / "does_not_exist.json"
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=nonexistent):
+                providers = discover_providers(llm_provider=None)
+        assert providers == []
 
 
 class TestMergeResponses:

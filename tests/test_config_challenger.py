@@ -31,14 +31,16 @@ def test_resolve_challenger_finds_anthropic_for_openai():
 
 def test_resolve_challenger_skips_unavailable():
     """If preferred provider has no key, falls to next."""
-    with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}, clear=True):
-        result = resolve_challenger_provider("anthropic")
-        assert result is not None
-        provider, _ = result
-        assert provider == "gemini"
+    with patch("sat.config._load_config_file_key", return_value=None):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}, clear=True):
+            result = resolve_challenger_provider("anthropic")
+            assert result is not None
+            provider, _ = result
+            assert provider == "gemini"
 
 
 def test_resolve_challenger_returns_none_when_no_keys():
-    with patch.dict(os.environ, {}, clear=True):
-        result = resolve_challenger_provider("anthropic")
-        assert result is None
+    with patch("sat.config._load_config_file_key", return_value=None):
+        with patch.dict(os.environ, {}, clear=True):
+            result = resolve_challenger_provider("anthropic")
+            assert result is None

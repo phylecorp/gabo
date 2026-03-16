@@ -18,13 +18,25 @@ const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
   gemini: 'Google Gemini',
+  perplexity: 'Perplexity',
+  brave: 'Brave Search',
 }
 
 const PROVIDER_MODEL_PLACEHOLDERS: Record<string, string> = {
   anthropic: 'claude-opus-4-6',
   openai: 'o3',
   gemini: 'gemini-2.5-pro',
+  perplexity: 'sonar-deep-research',
+  brave: '',
 }
+
+/**
+ * Research providers use a different API (no LLM model selection).
+ * Brave has no model concept at all; Perplexity always uses sonar-deep-research
+ * but we still expose the model field so advanced users can override if needed.
+ * Only Brave hides the model field entirely.
+ */
+const HIDE_MODEL_PROVIDERS = new Set(['brave'])
 
 interface ProviderDraft {
   api_key: string
@@ -180,7 +192,7 @@ export default function Settings() {
       <div className="settings-header">
         <h2 className="settings-title">Settings</h2>
         <span className="settings-subtitle text-muted text-xs">
-          Configure LLM provider API keys and default models
+          Configure LLM and research provider API keys
         </span>
       </div>
 
@@ -191,6 +203,7 @@ export default function Settings() {
             name={name}
             label={PROVIDER_LABELS[name] ?? name}
             modelPlaceholder={PROVIDER_MODEL_PLACEHOLDERS[name] ?? ''}
+            hideModel={HIDE_MODEL_PROVIDERS.has(name)}
             info={info}
             draft={getDraft(name)}
             testState={testStates[name] ?? { loading: false, result: null }}
@@ -200,18 +213,19 @@ export default function Settings() {
             onModelChange={(v) => handleModelChange(name, v)}
             onRemoveKey={() => handleRemoveKey(name)}
             onTestProvider={() => handleTestProvider(name)}
+            onToggleShowKey={() => setDraft(name, { show_key: !getDraft(name).show_key })}
           />
         ))}
       </div>
 
       <div className="settings-footer">
         {saveStatus === 'error' && saveError && (
-          <span className="settings-save-error text-sm" style={{ color: 'var(--color-signal-red)' }}>
+          <span className="settings-save-error text-sm">
             {saveError}
           </span>
         )}
         {saveStatus === 'saved' && (
-          <span className="settings-save-ok text-sm" style={{ color: 'var(--color-signal-green)' }}>
+          <span className="settings-save-ok text-sm">
             Settings saved
           </span>
         )}
@@ -235,6 +249,8 @@ interface ProviderCardProps {
   name: string
   label: string
   modelPlaceholder: string
+  /** When true, the Default Model section is hidden (e.g. Brave Search has no model). */
+  hideModel?: boolean
   info: ProviderSettingsResponse
   draft: ProviderDraft
   testState: TestState
@@ -244,12 +260,14 @@ interface ProviderCardProps {
   onModelChange: (value: string) => void
   onRemoveKey: () => void
   onTestProvider: () => void
+  onToggleShowKey: () => void
 }
 
 function ProviderCard({
   name,
   label,
   modelPlaceholder,
+  hideModel = false,
   info,
   draft,
   testState,
@@ -259,6 +277,7 @@ function ProviderCard({
   onModelChange,
   onRemoveKey,
   onTestProvider,
+  onToggleShowKey,
 }: ProviderCardProps) {
   const isConnected = info.has_api_key
   const isEditingKey = draft.editing_key
@@ -279,7 +298,7 @@ function ProviderCard({
       </div>
 
       {/* API Key section */}
-      <div className="form-section" style={{ marginTop: '1rem' }}>
+      <div className="form-section form-section-spaced">
         <label className="form-label" htmlFor={`key-${name}`}>API Key</label>
 
         {!isEditingKey && info.has_api_key && (
@@ -313,8 +332,7 @@ function ProviderCard({
               <input
                 id={`key-${name}`}
                 type={draft.show_key ? 'text' : 'password'}
-                className="model-override-input"
-                style={{ maxWidth: '100%', flex: 1 }}
+                className="model-override-input settings-key-input"
                 value={draft.api_key}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => onKeyChange(e.target.value)}
                 placeholder={`Enter ${label} API key`}
@@ -323,10 +341,7 @@ function ProviderCard({
               />
               <button
                 className="btn-secondary settings-btn-sm"
-                onClick={() => {
-                  // toggle show_key via onKeyChange side-channel not available here
-                  // handled inline via local state in parent via setDraft
-                }}
+                onClick={onToggleShowKey}
                 type="button"
                 title={draft.show_key ? 'Hide key' : 'Show key'}
               >
@@ -360,26 +375,28 @@ function ProviderCard({
         )}
       </div>
 
-      {/* Default model section */}
-      <div className="form-section" style={{ marginTop: '1rem' }}>
-        <label className="form-label" htmlFor={`model-${name}`}>Default Model</label>
-        <input
-          id={`model-${name}`}
-          type="text"
-          className="model-override-input"
-          value={draft.default_model}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => onModelChange(e.target.value)}
-          placeholder={info.default_model || modelPlaceholder}
-        />
-        <span className="form-label-hint text-xs">
-          Leave blank to use the built-in default ({modelPlaceholder})
-        </span>
-      </div>
+      {/* Default model section — hidden for providers without a model concept (e.g. Brave Search) */}
+      {!hideModel && (
+        <div className="form-section form-section-spaced">
+          <label className="form-label" htmlFor={`model-${name}`}>Default Model</label>
+          <input
+            id={`model-${name}`}
+            type="text"
+            className="model-override-input"
+            value={draft.default_model}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => onModelChange(e.target.value)}
+            placeholder={info.default_model || modelPlaceholder}
+          />
+          <span className="form-label-hint text-xs">
+            Leave blank to use the built-in default ({modelPlaceholder})
+          </span>
+        </div>
+      )}
 
       {/* Source badge */}
       {info.source !== 'default' && (
-        <div style={{ marginTop: '0.75rem' }}>
-          <span className="intel-badge badge-cyan" style={{ fontSize: '10px' }}>
+        <div className="settings-source-badge-row">
+          <span className="intel-badge badge-cyan settings-source-badge">
             {info.source === 'config_file' ? 'from config file' : 'from environment'}
           </span>
         </div>

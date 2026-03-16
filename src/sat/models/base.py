@@ -82,6 +82,7 @@ class ArtifactManifest(BaseModel):
     )
     artifacts: list[Artifact] = Field(default_factory=list)
     synthesis_path: str | None = None
+    evidence_path: str | None = None
     evidence_provided: bool = False
     adversarial_enabled: bool = False
     providers_used: list[str] = Field(default_factory=list)

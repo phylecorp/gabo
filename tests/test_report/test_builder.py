@@ -403,6 +403,146 @@ class TestReportBuilder:
         assert "fewer than 2 techniques completed" in content
 
 
+class TestSynthesisPathBackwardCompat:
+    """Builder should load synthesis from both old .md paths and new .json paths."""
+
+    def _setup_with_synthesis_path(self, tmp_path, synthesis_path_value: str):
+        """Set up a run where manifest.synthesis_path is set to the given value."""
+        output_dir = tmp_path / "sat-synthtest"
+        output_dir.mkdir()
+
+        synthesis = SynthesisResult(
+            technique_id="synthesis",
+            technique_name="Synthesis",
+            summary="Cross-technique synthesis.",
+            question="Will AI transform healthcare?",
+            techniques_applied=["assumptions"],
+            key_findings=[
+                TechniqueFinding(
+                    technique_id="assumptions",
+                    technique_name="Key Assumptions Check",
+                    summary="Assumptions identified.",
+                    key_finding="Key finding text.",
+                    confidence="High",
+                ),
+            ],
+            convergent_judgments=["Agreement found."],
+            divergent_signals=[],
+            highest_confidence_assessments=["High-confidence result."],
+            remaining_uncertainties=[],
+            recommended_next_steps=[],
+            bottom_line_assessment="Bottom line assessment.",
+        )
+        json_path = _write_json_artifact(output_dir, "09-synthesis.json", synthesis)
+
+        artifacts = [
+            Artifact(
+                technique_id="synthesis",
+                technique_name="Synthesis",
+                category="synthesis",
+                markdown_path=str(output_dir / "09-synthesis.md"),
+                json_path=json_path,
+            ),
+        ]
+        _create_manifest(
+            output_dir,
+            artifacts,
+            synthesis_path=synthesis_path_value,
+            techniques_selected=["assumptions"],
+            techniques_completed=["assumptions", "synthesis"],
+        )
+        return output_dir
+
+    def test_builder_loads_synthesis_from_json_path(self, tmp_path):
+        """When synthesis_path is the .json path (new format), builder loads synthesis data."""
+        output_dir = tmp_path / "sat-synthtest"
+        output_dir.mkdir()
+        synthesis = SynthesisResult(
+            technique_id="synthesis",
+            technique_name="Synthesis",
+            summary="Synthesis via json path.",
+            question="Test Q?",
+            techniques_applied=["assumptions"],
+            key_findings=[],
+            convergent_judgments=[],
+            divergent_signals=[],
+            highest_confidence_assessments=[],
+            remaining_uncertainties=[],
+            recommended_next_steps=[],
+            bottom_line_assessment="JSON path bottom line.",
+        )
+        json_path = _write_json_artifact(output_dir, "09-synthesis.json", synthesis)
+        artifacts = [
+            Artifact(
+                technique_id="synthesis",
+                technique_name="Synthesis",
+                category="synthesis",
+                markdown_path=str(output_dir / "09-synthesis.md"),
+                json_path=json_path,
+            ),
+        ]
+        # New format: synthesis_path IS the json path
+        _create_manifest(
+            output_dir,
+            artifacts,
+            synthesis_path=json_path,
+            techniques_selected=["assumptions"],
+            techniques_completed=["assumptions"],
+        )
+
+        builder = ReportBuilder(output_dir)
+        context = builder._build_context()
+        # Builder unpacks synthesis fields directly into the context dict
+        assert context["bottom_line_assessment"] == "JSON path bottom line.", (
+            "synthesis data should be loaded from the JSON artifact path"
+        )
+
+    def test_builder_loads_synthesis_from_md_path_backward_compat(self, tmp_path):
+        """When synthesis_path is the .md path (old format), builder still finds the .json via artifact lookup."""
+        output_dir = tmp_path / "sat-synthtest"
+        output_dir.mkdir()
+        synthesis = SynthesisResult(
+            technique_id="synthesis",
+            technique_name="Synthesis",
+            summary="Synthesis via md path fallback.",
+            question="Test Q?",
+            techniques_applied=["assumptions"],
+            key_findings=[],
+            convergent_judgments=[],
+            divergent_signals=[],
+            highest_confidence_assessments=[],
+            remaining_uncertainties=[],
+            recommended_next_steps=[],
+            bottom_line_assessment="MD path bottom line.",
+        )
+        json_path = _write_json_artifact(output_dir, "09-synthesis.json", synthesis)
+        artifacts = [
+            Artifact(
+                technique_id="synthesis",
+                technique_name="Synthesis",
+                category="synthesis",
+                markdown_path=str(output_dir / "09-synthesis.md"),
+                json_path=json_path,
+            ),
+        ]
+        # Old format: synthesis_path is the .md path (no .json file at that path)
+        md_path = str(output_dir / "09-synthesis.md")
+        _create_manifest(
+            output_dir,
+            artifacts,
+            synthesis_path=md_path,
+            techniques_selected=["assumptions"],
+            techniques_completed=["assumptions"],
+        )
+
+        builder = ReportBuilder(output_dir)
+        context = builder._build_context()
+        # The artifact-based lookup finds it via artifact.json_path even when synthesis_path is .md
+        assert context["bottom_line_assessment"] == "MD path bottom line.", (
+            "synthesis should be found via artifact.json_path lookup (backward compat)"
+        )
+
+
 class TestGenerateReportFunction:
     """Test the public API generate_report()."""
 

@@ -23,6 +23,7 @@ from sat.providers.rate_limiter import ProviderRateLimiter
 from sat.api.routes.analysis import create_analysis_router
 from sat.api.routes.config import router as config_router
 from sat.api.routes.evidence import create_evidence_router
+from sat.api.routes.models import router as models_router
 from sat.api.routes.runs import create_runs_router
 from sat.api.routes.techniques import router as techniques_router
 from sat.api.ws import create_ws_router
@@ -55,10 +56,15 @@ def create_app(port: int = 8742) -> FastAPI:
     evidence_manager = EvidenceSessionManager()
     rate_limiter = ProviderRateLimiter(max_concurrent_per_provider=4)
 
+    # Store managers on app.state so tests and diagnostic tooling can inspect them
+    app.state.run_manager = manager
+    app.state.evidence_manager = evidence_manager
+
     app.include_router(create_analysis_router(manager, port, rate_limiter))
     app.include_router(create_runs_router(manager))
     app.include_router(techniques_router)
     app.include_router(config_router)
+    app.include_router(models_router)
     app.include_router(create_evidence_router(evidence_manager, manager, port, rate_limiter))
     app.include_router(create_ws_router(manager, evidence_manager))
 

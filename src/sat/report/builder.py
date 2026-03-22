@@ -400,11 +400,22 @@ class ReportBuilder:
             except Exception:
                 logger.debug("Could not load artifact %s for LLM context", artifact.technique_id)
 
+        # @decision DEC-REPORT-006: Read evidence.txt from output_dir for report context.
+        # Pipeline writes evidence.txt after all transformations (DEC-PIPE-005).
+        # Reading from disk avoids bloating manifest.json with large evidence strings.
+        evidence_text: str | None = None
+        evidence_path = self.output_dir / "evidence.txt"
+        if evidence_path.exists():
+            try:
+                evidence_text = evidence_path.read_text(encoding="utf-8")
+            except Exception:
+                logger.debug("Could not read evidence.txt from %s", evidence_path)
+
         return {
             "question": self.manifest.question,
             "synthesis": synthesis_data,
             "technique_artifacts": technique_artifacts,
-            "evidence": None,  # Evidence string not stored in manifest; available at pipeline level
+            "evidence": evidence_text,
         }
 
     async def write_llm(self, provider: "LLMProvider", fmt: str = "both") -> list[Path]:

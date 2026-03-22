@@ -7,6 +7,7 @@
  *   for confidence, category, and verification status. Quick actions (Select All, Deselect
  *   All, High Confidence Only) enable efficient curation of large evidence pools.
  */
+import { useState } from 'react'
 import type { EvidencePool } from '../../api/types'
 
 interface Props {
@@ -20,6 +21,7 @@ interface Props {
   onSubmit: () => void
   onBack: () => void
   submitting: boolean
+  onUpdateItem?: (itemId: string, updates: { claim?: string; confidence?: string; category?: string }) => void
 }
 
 export default function EvidenceReview({
@@ -33,7 +35,12 @@ export default function EvidenceReview({
   onSubmit,
   onBack,
   submitting,
+  onUpdateItem,
 }: Props) {
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editClaim, setEditClaim] = useState('')
+  const [editConfidence, setEditConfidence] = useState('')
+  const [editCategory, setEditCategory] = useState('')
   const sourceCount = pool.sources?.length ?? 0
   const canSubmit = selectedCount > 0 && !submitting
 
@@ -118,39 +125,96 @@ export default function EvidenceReview({
               aria-label={`Toggle: ${item.claim}`}
             />
             <div className="evidence-item-content">
-              <div className="evidence-item-claim">{item.claim}</div>
-              <div className="evidence-item-meta">
-                {/* Source badge */}
-                <span className={`evidence-badge evidence-badge-source-${item.source}`}>
-                  {item.source}
-                </span>
+              {editingId === item.item_id ? (
+                <div className="evidence-edit-form" onClick={e => e.stopPropagation()}>
+                  <textarea
+                    className="evidence-edit-claim"
+                    value={editClaim}
+                    onChange={e => setEditClaim(e.target.value)}
+                    rows={3}
+                    style={{ width: '100%', padding: '8px', fontFamily: 'inherit', fontSize: 'inherit', border: '1px solid var(--color-border)', borderRadius: '4px', resize: 'vertical' }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center' }}>
+                    <select
+                      value={editConfidence}
+                      onChange={e => setEditConfidence(e.target.value)}
+                      style={{ padding: '4px 8px', border: '1px solid var(--color-border)', borderRadius: '4px' }}
+                    >
+                      <option value="High">High</option>
+                      <option value="Medium">Medium</option>
+                      <option value="Low">Low</option>
+                    </select>
+                    <select
+                      value={editCategory}
+                      onChange={e => setEditCategory(e.target.value)}
+                      style={{ padding: '4px 8px', border: '1px solid var(--color-border)', borderRadius: '4px' }}
+                    >
+                      <option value="fact">fact</option>
+                      <option value="analysis">analysis</option>
+                      <option value="opinion">opinion</option>
+                      <option value="projection">projection</option>
+                    </select>
+                    <button type="button" className="evidence-action-btn" onClick={() => {
+                      onUpdateItem?.(item.item_id, { claim: editClaim, confidence: editConfidence, category: editCategory })
+                      setEditingId(null)
+                    }}>Save</button>
+                    <button type="button" className="evidence-action-btn" onClick={() => setEditingId(null)}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="evidence-item-claim">{item.claim}</div>
+                  <div className="evidence-item-meta">
+                    {/* Source badge */}
+                    <span className={`evidence-badge evidence-badge-source-${item.source}`}>
+                      {item.source}
+                    </span>
 
-                {/* Provider name (research items only) */}
-                {item.provider_name && (
-                  <span className="evidence-badge evidence-badge-provider">
-                    {item.provider_name}
-                  </span>
-                )}
+                    {/* Provider name (research items only) */}
+                    {item.provider_name && (
+                      <span className="evidence-badge evidence-badge-provider">
+                        {item.provider_name}
+                      </span>
+                    )}
 
-                {/* Confidence badge */}
-                <span className={`evidence-badge evidence-badge-confidence-${item.confidence}`}>
-                  {item.confidence}
-                </span>
+                    {/* Confidence badge */}
+                    <span className={`evidence-badge evidence-badge-confidence-${item.confidence}`}>
+                      {item.confidence}
+                    </span>
 
-                {/* Category badge */}
-                {item.category && (
-                  <span className="evidence-badge" style={{ background: 'rgba(152,152,176,0.1)', color: 'var(--color-text-secondary)' }}>
-                    {item.category}
-                  </span>
-                )}
+                    {/* Category badge */}
+                    {item.category && (
+                      <span className="evidence-badge" style={{ background: 'rgba(152,152,176,0.1)', color: 'var(--color-text-secondary)' }}>
+                        {item.category}
+                      </span>
+                    )}
 
-                {/* Verified checkmark */}
-                {item.verified && (
-                  <span className="evidence-badge evidence-badge-verified" title="Verified">
-                    ✓ verified
-                  </span>
-                )}
-              </div>
+                    {/* Verified checkmark */}
+                    {item.verified && (
+                      <span className="evidence-badge evidence-badge-verified" title="Verified">
+                        ✓ verified
+                      </span>
+                    )}
+
+                    {!submitting && (
+                      <button
+                        type="button"
+                        className="evidence-action-btn"
+                        style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: '0.8rem' }}
+                        onClick={e => {
+                          e.stopPropagation()
+                          setEditingId(item.item_id)
+                          setEditClaim(item.claim)
+                          setEditConfidence(item.confidence)
+                          setEditCategory(item.category || 'fact')
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         ))}

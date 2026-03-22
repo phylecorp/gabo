@@ -52,6 +52,7 @@ from sat.api.models import (
     EvidenceGatherResponse,
     PoolRequest,
     PoolResponse,
+    UpdateEvidenceItemRequest,
 )
 from sat.api.run_manager import ActiveRun, RunManager
 from sat.config import (
@@ -408,5 +409,55 @@ def create_evidence_router(
         session.status = "ready"
 
         return PoolResponse(session_id=session.session_id, pool=pool)
+
+    @router.patch("/api/evidence/{session_id}/items/{item_id}")
+    async def update_evidence_item(
+        session_id: str,
+        item_id: str,
+        request: UpdateEvidenceItemRequest,
+    ) -> EvidenceItem:
+        """Update fields on a single evidence item during curation.
+
+        @decision DEC-API-015
+        @title PATCH endpoint for evidence item editing during curation
+        @status accepted
+        @rationale Users need to correct errors in gathered evidence items (wrong claim
+        text, incorrect confidence, or mis-categorized items) before committing to analysis.
+        Only fields that are provided (non-None) are updated; others are preserved.
+        Returns the updated EvidenceItem. Session must exist and be in 'ready' state.
+        The update is applied to session.pool in-place so subsequent GET /api/evidence/{id}
+        reflects the change without a re-gather.
+        """
+        session = evidence_manager.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Evidence session not found")
+        if session.pool is None or session.status != "ready":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Evidence session not ready (status: {session.status})",
+            )
+
+        # Find and update the item; rebuild the items list immutably (Pydantic models are frozen)
+        updated_item: EvidenceItem | None = None
+        updated_items = []
+        for item in session.pool.items:
+            if item.item_id == item_id:
+                updates = {}
+                if request.claim is not None:
+                    updates["claim"] = request.claim
+                if request.confidence is not None:
+                    updates["confidence"] = request.confidence
+                if request.category is not None:
+                    updates["category"] = request.category
+                updated_item = item.model_copy(update=updates) if updates else item
+                updated_items.append(updated_item)
+            else:
+                updated_items.append(item)
+
+        if updated_item is None:
+            raise HTTPException(status_code=404, detail=f"Evidence item {item_id} not found")
+
+        session.pool = session.pool.model_copy(update={"items": updated_items})
+        return updated_item
 
     return router

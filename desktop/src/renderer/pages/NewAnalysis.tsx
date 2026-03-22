@@ -76,6 +76,7 @@ export default function NewAnalysis() {
     evidencePool,
     sessionId: evidenceSessionId,
     toggleItem,
+    updateItem,
     selectAll,
     deselectAll,
     selectByFilter,
@@ -110,6 +111,7 @@ export default function NewAnalysis() {
   // Advanced toggles
   const [researchEnabled, setResearchEnabled] = useState(true)
   const [researchMode, setResearchMode] = useState<'multi' | 'single'>('multi')
+  const [gapResolutionEnabled, setGapResolutionEnabled] = useState(true)
   const [adversarialEnabled, setAdversarialEnabled] = useState(prefill?.adversarialEnabled ?? true)
   const [adversarialMode, setAdversarialMode] = useState<'dual' | 'trident'>('dual')
   const [adversarialRounds, setAdversarialRounds] = useState(1)
@@ -164,8 +166,7 @@ export default function NewAnalysis() {
     // on the backend and show the review step before running analysis (DEC-DESKTOP-NEW-ANALYSIS-POOL-001).
     if (hasEvidence && baseUrl) {
       try {
-        const client = client!
-        const { session_id, pool } = await client.createEvidencePool({
+        const { session_id, pool } = await client!.createEvidencePool({
           question: question.trim(),
           name: name.trim() || undefined,
           evidence: evidence.trim() || undefined,
@@ -192,6 +193,7 @@ export default function NewAnalysis() {
         model: effectiveModel,
         research_enabled: researchEnabled,
         research_mode: researchEnabled ? researchMode : undefined,
+        gap_resolution_enabled: gapResolutionEnabled,
         adversarial_enabled: adversarialEnabled,
         adversarial_mode: adversarialEnabled ? adversarialMode : undefined,
         adversarial_rounds: adversarialEnabled ? adversarialRounds : undefined,
@@ -243,8 +245,7 @@ export default function NewAnalysis() {
     setSubmitting(true)
 
     try {
-      const client = client!
-      const response = await client.analyzeWithCuratedEvidence(evidenceSessionId, {
+      const response = await client!.analyzeWithCuratedEvidence(evidenceSessionId, {
         selected_item_ids: evidencePool?.items
           .filter(i => i.selected)
           .map(i => i.item_id) ?? [],
@@ -319,6 +320,9 @@ export default function NewAnalysis() {
           onSubmit={handleCuratedSubmit}
           onBack={handleBackFromReview}
           submitting={submitting}
+          onUpdateItem={(itemId, updates) => {
+            if (evidenceSessionId) updateItem(evidenceSessionId, itemId, updates)
+          }}
         />
       </div>
     )
@@ -475,6 +479,23 @@ export default function NewAnalysis() {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Gap Resolution */}
+              <div className="form-toggle-row">
+                <label className="form-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={gapResolutionEnabled}
+                    onChange={e => setGapResolutionEnabled(e.target.checked)}
+                    disabled={submitting}
+                    className="form-checkbox"
+                  />
+                  <span className="form-toggle-name">Gap Resolution</span>
+                  <span className="form-toggle-desc text-muted text-xs">
+                    Run follow-up research to fill identified information gaps
+                  </span>
+                </label>
               </div>
 
               {/* Adversarial */}

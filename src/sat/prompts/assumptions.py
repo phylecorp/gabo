@@ -59,7 +59,7 @@ Follow these steps from the Tradecraft Primer:
 Your output should include:
 
 - **analytic_line**: The main analytic judgment or hypothesis being examined
-- **assumptions**: A list of refined assumptions, each with confidence level, basis_for_confidence, what_undermines, and impact_if_wrong
+- **assumptions**: A list of refined assumptions, each with confidence level, basis_for_confidence, what_undermines, impact_if_wrong, and evidence_references. Each assumption should include `evidence_references` — a list of evidence item IDs from the Evidence Registry (e.g., ["D-F1", "R-C3"]) that support or relate to the assumption. If no Evidence Registry is available, leave this empty.
 - **most_vulnerable**: The 2-3 assumptions that pose the greatest risk to the analysis
 - **recommended_monitoring**: Specific actions or indicators to track for validating or invalidating key assumptions
 

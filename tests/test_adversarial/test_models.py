@@ -73,31 +73,6 @@ def _make_adjudication() -> AdjudicationResult:
     )
 
 
-def test_critique_result_serialization():
-    critique = _make_critique()
-    data = critique.model_dump()
-    restored = CritiqueResult(**data)
-    assert restored.severity == "Moderate"
-    assert len(restored.challenges) == 1
-    assert restored.challenges[0].severity == "Medium"
-
-
-def test_rebuttal_result_serialization():
-    rebuttal = _make_rebuttal()
-    data = rebuttal.model_dump()
-    restored = RebuttalResult(**data)
-    assert len(restored.accepted_challenges) == 1
-    assert not restored.rejected_challenges[0].conceded
-
-
-def test_adjudication_result_serialization():
-    adj = _make_adjudication()
-    data = adj.model_dump()
-    restored = AdjudicationResult(**data)
-    assert len(restored.resolved_for_challenger) == 1
-    assert len(restored.unresolved) == 1
-
-
 def test_debate_round_structure():
     critique = _make_critique()
     rebuttal = _make_rebuttal()

@@ -33,6 +33,7 @@ Follow these steps from the Tradecraft Primer:
    - Assumptions underlying the analysis
    - Logical arguments or inferences
    - Contextual factors
+   - **When an Evidence Registry is provided**: Use the original evidence IDs (D-F1, R-C1, etc.) from the registry to track provenance. Map each piece of evidence you use back to its source item.
 
 3. **Prepare the ACH Matrix**: Create a matrix with hypotheses across the top and evidence down the side. This is the core analytical structure.
 
@@ -67,7 +68,7 @@ Follow these steps from the Tradecraft Primer:
 Your output must include:
 
 - **hypotheses**: Complete list of hypotheses considered, each with an `id` (e.g. "H1") and `description`
-- **evidence**: All significant evidence items in the matrix, each with `id` (e.g. "E1"), `description`, `credibility` ("High"/"Medium"/"Low"), and `relevance` ("High"/"Medium"/"Low")
+- **evidence**: All significant evidence items in the matrix, each with `id` (e.g. "E1"), `description`, `credibility` ("High"/"Medium"/"Low"), `relevance` ("High"/"Medium"/"Low"), and `source_evidence_ids` (list of original evidence IDs from the Evidence Registry, e.g. ["D-F1", "R-C3"]). When an Evidence Registry is provided, map each ACH evidence item back to the original evidence it draws from. If no registry is provided, leave `source_evidence_ids` empty.
 - **matrix**: The full ACH matrix as a list of rating objects. Every evidence-hypothesis pair must have an entry. Example entry:
   `{"evidence_id": "E1", "hypothesis_id": "H1", "rating": "C", "explanation": "APT groups routinely use this C2 pattern"}`
 - **inconsistency_scores**: Leave empty — computed in post-processing

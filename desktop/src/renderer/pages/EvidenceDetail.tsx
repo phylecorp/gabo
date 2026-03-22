@@ -27,10 +27,9 @@ export default function EvidenceDetail() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!runId || !baseUrl) return
+    if (!runId || !baseUrl || !client) return
     setLoading(true)
     setError(null)
-    const client = client!
     client.getRunEvidence(runId)
       .then(data => {
         setPool(data)
@@ -40,7 +39,7 @@ export default function EvidenceDetail() {
         setError((err as Error).message ?? 'Failed to load evidence')
         setLoading(false)
       })
-  }, [runId, baseUrl])
+  }, [runId, baseUrl, client])
 
   const question = pool?.question ?? run?.question ?? 'Analysis'
 

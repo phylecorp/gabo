@@ -19,6 +19,16 @@
  *   providers with non-empty research model lists (Perplexity, OpenAI, Gemini).
  *   Anthropic has no research provider so its research list is always empty.
  *   Brave has no model concept at all and is hidden via HIDE_MODEL_PROVIDERS.
+ *
+ * @decision DEC-MODELS-004
+ * @title Settings dropdowns populated from models endpoint with free-text fallback
+ * @status accepted
+ * @rationale Dropdowns for usability (eliminates typos, surfaces real options);
+ *   free-text fallback for resilience (Settings still works when models endpoint
+ *   is unreachable — no API key yet, network issue). The useModels(provider) hook
+ *   encapsulates the fetch + error state; ProviderCard switches between
+ *   ModelSelect and <input> based on whether a non-empty model list arrived.
+ *   Addresses REQ-P0-002 (model selection) and REQ-P1-002 (graceful degradation).
  */
 import { useState, type ChangeEvent } from 'react'
 import { useSettings, useUpdateSettings, useTestProvider } from '../hooks/useSettings'

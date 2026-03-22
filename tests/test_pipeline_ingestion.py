@@ -94,7 +94,7 @@ class TestPipelineIngestionPhase:
             patch("sat.pipeline.get_technique") as mock_get_technique,
             patch(
                 "sat.artifacts.ArtifactWriter.write_result",
-                side_effect=lambda r: written_results.append(r) or _fake_artifact(),
+                side_effect=lambda r, **kwargs: written_results.append(r) or _fake_artifact(),
             ),
             patch("sat.artifacts.ArtifactWriter.write_manifest"),
             patch("sat.artifacts.ArtifactWriter.get_technique_artifacts", return_value=[]),
@@ -188,7 +188,7 @@ class TestPipelineIngestionPhase:
             patch("sat.pipeline.get_technique", return_value=_make_mock_technique()),
             patch(
                 "sat.artifacts.ArtifactWriter.write_result",
-                side_effect=lambda r: written_results.append(r) or _fake_artifact(),
+                side_effect=lambda r, **kwargs: written_results.append(r) or _fake_artifact(),
             ),
             patch("sat.artifacts.ArtifactWriter.write_manifest"),
             patch("sat.artifacts.ArtifactWriter.get_technique_artifacts", return_value=[]),

@@ -56,7 +56,7 @@ Your output should include:
 
 - **question**: The original analytic question
 - **techniques_applied**: Which techniques were used
-- **key_findings**: Important findings from each technique with confidence levels
+- **key_findings**: Important findings from each technique with confidence levels. Each finding should include `evidence_references` — a list of evidence item IDs (e.g., ["D-F1", "R-C3"]) that the finding draws upon. Trace findings back to specific evidence whenever possible.
 - **convergent_judgments**: Where multiple techniques agree
 - **divergent_signals**: Where techniques conflict or produce tension
 - **highest_confidence_assessments**: The most solid conclusions

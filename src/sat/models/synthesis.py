@@ -33,6 +33,10 @@ class TechniqueFinding(ArtifactResult):
     confidence: Literal["High", "Medium", "Low"] = Field(
         description="Confidence level in this finding based on evidence strength and technique limitations"
     )
+    evidence_references: list[str] = Field(
+        default_factory=list,
+        description="IDs of original evidence items that support this finding (e.g., D-F1, R-C3)",
+    )
 
 
 class SynthesisResult(ArtifactResult):

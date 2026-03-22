@@ -32,10 +32,12 @@ import type {
   TestProviderResponse,
   EvidenceGatherRequest,
   EvidenceGatherResponse,
+  EvidenceItem,
   EvidencePool,
   CuratedAnalysisRequest,
   PoolRequest,
   PoolResponse,
+  UpdateEvidenceItemRequest,
   ModelsResponse,
 } from './types'
 
@@ -224,5 +226,19 @@ export class SatClient {
 
   async getModels(provider: string) {
     return this.request<ModelsResponse>(`/api/config/models/${encodeURIComponent(provider)}`)
+  }
+
+  async updateEvidenceItem(
+    sessionId: string,
+    itemId: string,
+    updates: UpdateEvidenceItemRequest,
+  ): Promise<EvidenceItem> {
+    return this.request<EvidenceItem>(
+      `/api/evidence/${sessionId}/items/${itemId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(updates),
+      },
+    )
   }
 }

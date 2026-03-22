@@ -37,6 +37,10 @@ class ACHEvidence(BaseModel):
     relevance: Literal["High", "Medium", "Low"] = Field(
         description="How directly this evidence bears on the hypotheses being evaluated"
     )
+    source_evidence_ids: list[str] = Field(
+        default_factory=list,
+        description="IDs of original evidence items this was derived from (e.g., D-F1, R-C3). Maps ACH evidence back to the input evidence registry.",
+    )
 
 
 class ACHHypothesis(BaseModel):

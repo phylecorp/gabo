@@ -9,25 +9,19 @@ from sat.providers.openai import OpenAIProvider
 from sat.providers.registry import create_provider
 
 
-def test_create_anthropic_provider():
-    """Test that create_provider returns AnthropicProvider for anthropic."""
-    config = ProviderConfig(provider="anthropic", api_key="test-key")
+@pytest.mark.parametrize(
+    "provider_name,expected_class",
+    [
+        ("anthropic", AnthropicProvider),
+        ("openai", OpenAIProvider),
+        ("gemini", GeminiProvider),
+    ],
+)
+def test_create_provider_returns_correct_type(provider_name, expected_class):
+    """Test that create_provider returns the correct provider type for each name."""
+    config = ProviderConfig(provider=provider_name, api_key="test-key")
     provider = create_provider(config)
-    assert isinstance(provider, AnthropicProvider)
-
-
-def test_create_openai_provider():
-    """Test that create_provider returns OpenAIProvider for openai."""
-    config = ProviderConfig(provider="openai", api_key="test-key")
-    provider = create_provider(config)
-    assert isinstance(provider, OpenAIProvider)
-
-
-def test_create_gemini_provider():
-    """Test that create_provider returns GeminiProvider for gemini."""
-    config = ProviderConfig(provider="gemini", api_key="test-key")
-    provider = create_provider(config)
-    assert isinstance(provider, GeminiProvider)
+    assert isinstance(provider, expected_class)
 
 
 def test_create_unknown_provider_raises():

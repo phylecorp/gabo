@@ -60,6 +60,7 @@ class AnalysisRequest(BaseModel):
     report_enabled: bool = True
     report_format: str = "both"
     evidence_sources: _EvidenceSources = None
+    gap_resolution_enabled: bool = True
 
 
 class AnalysisResponse(BaseModel):
@@ -220,6 +221,14 @@ class CuratedAnalysisRequest(BaseModel):
     report_enabled: bool = True
     report_format: str = "both"
     evidence_sources: _EvidenceSources = None
+
+
+class UpdateEvidenceItemRequest(BaseModel):
+    """Request to update fields on an evidence item during curation."""
+
+    claim: str | None = None
+    confidence: str | None = None
+    category: str | None = None
 
 
 class PoolRequest(BaseModel):

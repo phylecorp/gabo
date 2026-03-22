@@ -48,7 +48,13 @@ from sat.adversarial.config import AdversarialConfig, build_adversarial_config
 from sat.api.auth import verify_token
 from sat.api.models import AnalysisRequest, AnalysisResponse
 from sat.api.run_manager import ActiveRun, RunManager
-from sat.config import AnalysisConfig, ProviderConfig, ReportConfig, ResearchConfig
+from sat.config import (
+    AnalysisConfig,
+    GapResolutionConfig,
+    ProviderConfig,
+    ReportConfig,
+    ResearchConfig,
+)
 from sat.pipeline import run_analysis
 
 if TYPE_CHECKING:
@@ -79,7 +85,9 @@ def _validate_output_dir(output_dir: str) -> Path:
     resolved = Path(os.path.realpath(output_dir))
     cwd = Path(os.path.realpath("."))
     if not str(resolved).startswith(str(cwd)):
-        raise HTTPException(status_code=400, detail="output_dir must be within the working directory")
+        raise HTTPException(
+            status_code=400, detail="output_dir must be within the working directory"
+        )
     return resolved
 
 
@@ -154,6 +162,7 @@ def create_analysis_router(
         research_cfg = ResearchConfig(
             enabled=request.research_enabled,
             mode=request.research_mode,
+            gap_resolution=GapResolutionConfig(enabled=request.gap_resolution_enabled),
         )
 
         report_cfg = ReportConfig(

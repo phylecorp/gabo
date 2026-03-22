@@ -41,6 +41,7 @@ export interface AnalysisRequest {
   report_enabled?: boolean
   report_format?: string
   evidence_sources?: string[]
+  gap_resolution_enabled?: boolean
 }
 
 export interface AnalysisResponse {
@@ -323,6 +324,12 @@ export interface PoolRequest {
 export interface PoolResponse {
   session_id: string
   pool: EvidencePool
+}
+
+export interface UpdateEvidenceItemRequest {
+  claim?: string
+  confidence?: string
+  category?: string
 }
 
 // Evidence gathering progress state

@@ -309,6 +309,135 @@ class TestDiscoverProvidersConfigFile:
         assert providers == []
 
 
+class TestDiscoverProvidersModelWiring:
+    """Test that discover_providers() passes research_model from config to constructors.
+
+    Covers DEC-MODELS-003: discover_providers() explicitly passes
+    model=_load_config_file_research_model(provider) to each deep research provider.
+    This ensures the Settings UI model preference propagates through the multi-runner
+    path without relying solely on each provider's internal resolve_research_model().
+    """
+
+    def _make_config(self, tmp_path: Path, entries: dict) -> Path:
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"providers": entries}))
+        return config_file
+
+    def test_openai_model_from_config_passed_to_provider(self, tmp_path):
+        """discover_providers() passes research_model from config file to OpenAI provider."""
+        config_file = self._make_config(
+            tmp_path,
+            {"openai": {"api_key": "cfg-openai-key", "research_model": "o3-custom-research"}},
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        openai_providers = [p for name, p in providers if name == "openai_deep"]
+        assert len(openai_providers) == 1
+        assert openai_providers[0]._primary_model == "o3-custom-research"
+
+    def test_perplexity_model_from_config_passed_to_provider(self, tmp_path):
+        """discover_providers() passes research_model from config file to Perplexity provider."""
+        config_file = self._make_config(
+            tmp_path,
+            {
+                "perplexity": {
+                    "api_key": "cfg-perplexity-key",
+                    "research_model": "sonar-pro-custom",
+                }
+            },
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        pplx_providers = [p for name, p in providers if name == "perplexity"]
+        assert len(pplx_providers) == 1
+        assert pplx_providers[0]._model == "sonar-pro-custom"
+
+    def test_gemini_model_from_config_passed_to_provider(self, tmp_path):
+        """discover_providers() passes research_model from config file to Gemini provider."""
+        config_file = self._make_config(
+            tmp_path,
+            {"gemini": {"api_key": "cfg-gemini-key", "research_model": "gemini-deep-custom"}},
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        gemini_providers = [p for name, p in providers if name == "gemini_deep"]
+        assert len(gemini_providers) == 1
+        assert gemini_providers[0]._agent == "gemini-deep-custom"
+
+    def test_no_research_model_in_config_falls_back_to_default(self, tmp_path):
+        """When config has no research_model, provider resolves via built-in default."""
+        from sat.config import DEFAULT_RESEARCH_MODELS
+
+        config_file = self._make_config(
+            tmp_path, {"openai": {"api_key": "cfg-openai-key"}}
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        openai_providers = [p for name, p in providers if name == "openai_deep"]
+        assert len(openai_providers) == 1
+        assert openai_providers[0]._primary_model == DEFAULT_RESEARCH_MODELS["openai"]
+
+    def test_env_var_used_when_no_research_model_in_config(self, tmp_path):
+        """OPENAI_RESEARCH_MODEL env var used when config has no research_model field."""
+        config_file = self._make_config(
+            tmp_path, {"openai": {"api_key": "cfg-openai-key"}}
+        )
+        with patch.dict(
+            "os.environ",
+            {"OPENAI_RESEARCH_MODEL": "o4-env-override"},
+            clear=True,
+        ):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        openai_providers = [p for name, p in providers if name == "openai_deep"]
+        assert len(openai_providers) == 1
+        assert openai_providers[0]._primary_model == "o4-env-override"
+
+    def test_config_model_overrides_env_var(self, tmp_path):
+        """Config file research_model takes priority over env var in discover_providers()."""
+        config_file = self._make_config(
+            tmp_path,
+            {"openai": {"api_key": "cfg-openai-key", "research_model": "o3-from-config"}},
+        )
+        with patch.dict(
+            "os.environ",
+            {"OPENAI_RESEARCH_MODEL": "o3-from-env"},
+            clear=True,
+        ):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        openai_providers = [p for name, p in providers if name == "openai_deep"]
+        assert len(openai_providers) == 1
+        assert openai_providers[0]._primary_model == "o3-from-config"
+
+    def test_backward_compat_no_research_model_field(self, tmp_path):
+        """Existing configs without research_model still produce working providers."""
+        from sat.config import DEFAULT_RESEARCH_MODELS
+
+        config_file = self._make_config(
+            tmp_path,
+            {
+                "openai": {"api_key": "cfg-openai-key", "default_model": "o3"},
+                "perplexity": {"api_key": "cfg-perplexity-key", "default_model": "sonar-pro"},
+            },
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("sat.config._get_sat_config_path", return_value=config_file):
+                providers = discover_providers()
+        names = [name for name, _ in providers]
+        assert "openai_deep" in names
+        assert "perplexity" in names
+        for name, prov in providers:
+            if name == "openai_deep":
+                assert prov._primary_model == DEFAULT_RESEARCH_MODELS["openai"]
+            elif name == "perplexity":
+                assert prov._model == DEFAULT_RESEARCH_MODELS["perplexity"]
+
+
 class TestMergeResponses:
     """Test response merging logic."""
 

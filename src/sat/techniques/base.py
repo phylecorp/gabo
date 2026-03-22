@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 
 from sat.models.base import ArtifactResult
+from sat.models.evidence import TechniqueEvidence
 from sat.providers.base import LLMMessage, LLMProvider
 
 
@@ -30,7 +31,7 @@ class TechniqueContext:
     """Input context for a technique execution."""
 
     question: str
-    evidence: str | None = None
+    evidence: TechniqueEvidence | str | None = None
     prior_results: dict[str, ArtifactResult] = field(default_factory=dict)
 
 

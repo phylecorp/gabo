@@ -38,6 +38,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from sat.artifacts import ArtifactWriter
 from sat.config import AnalysisConfig
 from sat.errors import is_transient_error
+from sat.evidence.lineage import EvidenceLineage
 from sat.events import (
     ArtifactWritten,
     EventBus,
@@ -50,6 +51,7 @@ from sat.events import (
     StageStarted,
 )
 from sat.models.base import ArtifactResult
+from sat.models.evidence import EvidenceItem, TechniqueEvidence
 from sat.prompts.base import format_research_evidence
 from sat.providers.registry import create_provider
 from sat.techniques.base import TechniqueContext
@@ -115,7 +117,11 @@ def _short_error(exc: Exception, max_len: int = 80) -> str:
     return f"{type_name}: {msg}" if msg else type_name
 
 
-async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, rate_limiter: ProviderRateLimiter | None = None) -> Path:
+async def run_analysis(
+    config: AnalysisConfig,
+    events: EventBus | None = None,
+    rate_limiter: ProviderRateLimiter | None = None,
+) -> Path:
     """Execute a full structured analysis pipeline.
 
     Args:
@@ -158,6 +164,11 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
 
     provider = create_provider(config.provider, rate_limiter)
     writer = ArtifactWriter(output_dir, run_id, config.question, name=config.name)
+    evidence_items: list[EvidenceItem] = []  # Structured items for TechniqueEvidence
+
+    # Initialize lineage tracker and record the user-provided evidence state
+    lineage = EvidenceLineage(run_id=run_id)
+    lineage.record("initial", config.evidence)
 
     # Phase -1: Evidence Ingestion (file/URL parsing)
     if config.evidence_sources and config.ingestion.enabled:
@@ -180,6 +191,12 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                 f"[dim]Combined: ~{ingestion_result.total_estimated_tokens} estimated tokens[/dim]"
             )
             config = config.model_copy(update={"evidence": ingestion_result.combined_markdown})
+            lineage.record(
+                "ingestion",
+                config.evidence,
+                documents=len(ingestion_result.documents),
+                estimated_tokens=ingestion_result.total_estimated_tokens,
+            )
             for w in ingestion_result.warnings:
                 console.print(f"[yellow]Warning: {w}[/yellow]")
         except Exception:
@@ -207,6 +224,13 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                     f"[dim]Deduplication removed {decomp_result.duplicates_removed} duplicate(s)[/dim]"
                 )
             config = config.model_copy(update={"evidence": decomp_result.formatted_evidence})
+            lineage.record(
+                "decomposition",
+                config.evidence,
+                total_facts=decomp_result.total_facts,
+                chunks_processed=decomp_result.chunks_processed,
+                duplicates_removed=decomp_result.duplicates_removed,
+            )
             for w in decomp_result.warnings:
                 console.print(f"[yellow]Warning: {w}[/yellow]")
         except Exception:
@@ -227,6 +251,14 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
             )
             writer.write_result(preproc_result)
             config = config.model_copy(update={"evidence": preproc_result.formatted_evidence})
+            lineage.record(
+                "preprocessing",
+                config.evidence,
+                original_format=preproc_result.original_format.value,
+                reduction_applied=preproc_result.reduction_applied,
+                original_tokens=preproc_result.original_estimated_tokens,
+                output_tokens=preproc_result.output_estimated_tokens,
+            )
             if preproc_result.reduction_applied == "none":
                 console.print(
                     f"[dim]Evidence: {preproc_result.original_format.value}, "
@@ -319,6 +351,37 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                     logger.exception("Source verification failed")
                     console.print("[yellow]Verification failed, using unverified results[/yellow]")
 
+            # Phase 0c: Gap Resolution (iterative follow-up research)
+            if config.research.gap_resolution.enabled and research_result.gaps_identified:
+                try:
+                    from sat.research.gap_resolver import resolve_gaps
+                    from sat.research.registry import create_research_provider as _create_rp
+
+                    console.print(
+                        f"[bold blue]Resolving {len(research_result.gaps_identified)} information gap(s)...[/bold blue]"
+                    )
+                    gap_provider = _create_rp(
+                        provider_name=config.research.provider,
+                        api_key=config.research.api_key,
+                        llm_provider=provider,
+                    )
+                    research_result = await resolve_gaps(
+                        research_result=research_result,
+                        research_provider=gap_provider,
+                        llm_provider=provider,
+                        max_iterations=config.research.gap_resolution.max_iterations,
+                        max_sources=config.research.gap_resolution.max_sources_per_iteration,
+                        events=bus,
+                    )
+                    console.print(
+                        f"[green]Gap resolution:[/green] "
+                        f"{len(research_result.claims)} total claims, "
+                        f"{len(research_result.gaps_identified)} gaps remaining"
+                    )
+                except Exception:
+                    logger.exception("Gap resolution failed — using initial research results")
+                    console.print("[yellow]Gap resolution failed, using initial results[/yellow]")
+
             artifact = writer.write_result(research_result)
             await bus.emit(
                 ArtifactWritten(
@@ -328,15 +391,64 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                 )
             )
             research_evidence = format_research_evidence(research_result)
+            # Capture research claims as structured EvidenceItems
+            for n, claim in enumerate(research_result.claims, start=1):
+                evidence_items.append(
+                    EvidenceItem(
+                        item_id=f"R-C{n}",
+                        claim=claim.claim,
+                        source="research",
+                        source_ids=list(claim.source_ids),
+                        category=claim.category,
+                        confidence=claim.confidence,
+                        verified=claim.verified,
+                        selected=True,
+                    )
+                )
             # Merge: if user evidence already exists, append research after it
             if config.evidence:
                 merged_evidence = config.evidence + "\n\n" + research_evidence
             else:
                 merged_evidence = research_evidence
             config = config.model_copy(update={"evidence": merged_evidence})
+            lineage.record(
+                "research_merge",
+                config.evidence,
+                claims=len(research_result.claims),
+                sources=len(research_result.sources),
+            )
         except Exception:
             logger.exception("Deep research failed")
             console.print("[yellow]Research failed, continuing without evidence[/yellow]")
+
+    # Persist final evidence for report builder and auditability.
+    # @decision DEC-PIPE-005: Write evidence.txt after all transformations complete.
+    # The report builder reads this to include evidence in generated reports.
+    if config.evidence:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "evidence.txt").write_text(config.evidence, encoding="utf-8")
+
+    # @decision DEC-PIPE-007: Populate evidence_items from user evidence when research
+    # didn't run. Without this, TechniqueEvidence.items stays empty in the no-research
+    # path, so techniques can't cite evidence IDs from the Evidence Registry.
+    if config.evidence and not evidence_items:
+        paragraphs = [p.strip() for p in config.evidence.split("\n\n") if p.strip()]
+        for n, para in enumerate(paragraphs, start=1):
+            evidence_items.append(
+                EvidenceItem(
+                    item_id=f"U-{n}",
+                    claim=para,
+                    source="user",
+                    source_ids=[],
+                    category="fact",
+                    confidence="Medium",
+                    verified=False,
+                    selected=True,
+                )
+            )
+
+    # Persist evidence lineage for auditability (always written, even without evidence)
+    lineage.write(output_dir)
 
     # Phase 1: Select techniques
     if config.techniques:
@@ -388,6 +500,12 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                 f"[bold cyan]Adversarial mode enabled ({config.adversarial.rounds} rounds)[/bold cyan]"
             )
 
+    # @decision DEC-PIPE-006: Build TechniqueEvidence once before technique execution.
+    # Combines final evidence text with structured EvidenceItems from research.
+    technique_evidence: TechniqueEvidence | None = None
+    if config.evidence:
+        technique_evidence = TechniqueEvidence(text=config.evidence, items=evidence_items)
+
     # Phase 2: Execute techniques in dependency layers
     # @decision DEC-PIPE-003: Layer-based parallel technique execution.
     # Techniques with satisfied dependencies run concurrently within a layer.
@@ -415,7 +533,7 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                 try:
                     ctx = TechniqueContext(
                         question=config.question,
-                        evidence=config.evidence,
+                        evidence=technique_evidence,
                         prior_results=prior_results,
                     )
                     try:
@@ -427,11 +545,13 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                                 tid,
                                 type(first_exc).__name__,
                             )
-                            progress.update(task, description=f"[yellow]Retrying:[/yellow] {meta.name}")
+                            progress.update(
+                                task, description=f"[yellow]Retrying:[/yellow] {meta.name}"
+                            )
                             result = await technique.execute(ctx, provider)
                         else:
                             raise
-                    writer.write_result(result)
+                    writer.write_result(result, evidence=config.evidence)
                     prior_results[tid] = result
                     completed.append(tid)
                     progress.update(task, description=f"✅ [green]Done:[/green] {meta.name}")
@@ -447,7 +567,7 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                             exchange = await adversarial_session.run_adversarial_technique(
                                 technique_result=result,
                                 question=config.question,
-                                evidence=config.evidence,
+                                evidence=technique_evidence,
                             )
                             adversarial_exchanges.append(exchange)
                             for rnd in exchange.rounds:
@@ -461,7 +581,9 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
                             if exchange.convergence:
                                 writer.write_result(exchange.convergence)
 
-                            last_rebuttal = exchange.rounds[-1].rebuttal if exchange.rounds else None
+                            last_rebuttal = (
+                                exchange.rounds[-1].rebuttal if exchange.rounds else None
+                            )
                             if last_rebuttal and last_rebuttal.revised_conclusions:
                                 revised_summary = (
                                     f"{result.summary}\n\n"
@@ -516,11 +638,11 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
         try:
             synthesis_ctx = TechniqueContext(
                 question=config.question,
-                evidence=config.evidence,
+                evidence=technique_evidence,
                 prior_results=prior_results,
             )
             synthesis_result = await run_synthesis(synthesis_ctx, provider)
-            artifact = writer.write_result(synthesis_result)
+            artifact = writer.write_result(synthesis_result, evidence=config.evidence)
             synthesis_path = artifact.json_path
         except Exception:
             logger.exception("Synthesis failed")
@@ -629,8 +751,7 @@ async def run_analysis(config: AnalysisConfig, events: EventBus | None = None, r
     # Compact artifacts panel — technique count and output dir only.
     console.print(
         Panel(
-            f"Techniques: {len(completed)}/{len(technique_ids)} completed\n"
-            f"Output: {output_dir}",
+            f"Techniques: {len(completed)}/{len(technique_ids)} completed\nOutput: {output_dir}",
             title="[green]Artifacts[/green]",
             box=box.ROUNDED,
         )

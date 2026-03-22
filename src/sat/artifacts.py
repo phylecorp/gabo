@@ -292,10 +292,21 @@ class ArtifactWriter:
         self._artifacts: list[Artifact] = []
         self._started_at = datetime.now(timezone.utc)
 
-    def write_result(self, result: ArtifactResult) -> Artifact:
+    def write_result(self, result: ArtifactResult, evidence: str | None = None) -> Artifact:
         """Write a technique result as .md and .json files.
 
+        Args:
+            result: The technique result to write.
+            evidence: Optional evidence snapshot to persist alongside the artifact.
+                      When provided, writes {nn}-{tid}-evidence.txt using the same
+                      counter/prefix as the .md and .json files.
+
         Returns the Artifact record.
+
+        # @decision DEC-ART-003: Optional evidence snapshot alongside each artifact.
+        # When evidence is provided, writes {nn}-{tid}-evidence.txt using the same
+        # counter/prefix as the .md and .json files. Creates an auditable record
+        # of exactly what evidence each technique received.
         """
         self._counter += 1
         prefix = f"{self._counter:02d}-{result.technique_id}"
@@ -313,6 +324,11 @@ class ArtifactWriter:
             result.model_dump_json(indent=2),
             encoding="utf-8",
         )
+
+        # Write evidence snapshot if provided (N1: per-technique evidence auditability)
+        if evidence:
+            evidence_path = self.output_dir / f"{prefix}-evidence.txt"
+            evidence_path.write_text(evidence, encoding="utf-8")
 
         # Determine category
         category = "synthesis"

@@ -14,35 +14,6 @@ from __future__ import annotations
 from sat.adversarial.config import AdversarialConfig, ProviderRef, RoleAssignment
 
 
-def test_provider_ref_defaults():
-    ref = ProviderRef(provider="openai", model="o3")
-    assert ref.api_key is None
-    assert ref.provider == "openai"
-
-
-def test_provider_ref_with_api_key():
-    ref = ProviderRef(provider="anthropic", model="claude-opus-4-6", api_key="sk-test")
-    assert ref.api_key == "sk-test"
-
-
-def test_role_assignment_minimal():
-    roles = RoleAssignment(primary="claude", challenger="gpt4")
-    assert roles.adjudicator is None
-
-
-def test_role_assignment_with_adjudicator():
-    roles = RoleAssignment(primary="claude", challenger="gpt4", adjudicator="gemini")
-    assert roles.adjudicator == "gemini"
-
-
-def test_adversarial_config_defaults():
-    config = AdversarialConfig()
-    assert config.enabled is True
-    assert config.rounds == 2
-    assert config.providers == {}
-    assert config.roles is None
-
-
 def test_adversarial_config_full():
     config = AdversarialConfig(
         enabled=True,

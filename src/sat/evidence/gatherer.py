@@ -121,8 +121,22 @@ async def gather_evidence(
     if has_evidence and not decomposition_enabled:
         user_items = _split_to_user_items(evidence)  # type: ignore[arg-type]
 
-    # Merge and deduplicate
+    # Merge and exact-match deduplicate
     all_items = _merge_and_deduplicate(decomp_items, research_items, user_items)
+
+    # Semantic deduplication: LLM-based near-duplicate detection across sources
+    semantic_removed = 0
+    if len(all_items) >= 5:
+        try:
+            from sat.evidence.deduplicator import deduplicate_evidence
+
+            all_items, semantic_removed = await deduplicate_evidence(all_items, provider)
+            if semantic_removed > 0:
+                logger.info("Semantic deduplication removed %d near-duplicate(s)", semantic_removed)
+        except Exception:
+            logger.warning(
+                "Semantic deduplication failed — using exact-match results", exc_info=True
+            )
 
     pool = EvidencePool(
         session_id=session_id,

@@ -63,6 +63,7 @@ type Action =
   | { type: 'POOL_READY'; pool: EvidencePool }
   | { type: 'SET_PREBUILT_POOL'; pool: EvidencePool; sessionId: string }
   | { type: 'TOGGLE_ITEM'; itemId: string }
+  | { type: 'UPDATE_ITEM'; itemId: string; updates: Partial<EvidenceItem> }
   | { type: 'SELECT_ALL' }
   | { type: 'DESELECT_ALL' }
   | { type: 'SELECT_BY_FILTER'; filter: 'high-confidence' | 'research' | 'decomposition' | 'user' }
@@ -209,6 +210,21 @@ function reducer(state: EvidenceState, action: Action): EvidenceState {
       }
     }
 
+    case 'UPDATE_ITEM': {
+      if (!state.pool) return state
+      return {
+        ...state,
+        pool: {
+          ...state.pool,
+          items: state.pool.items.map(item =>
+            item.item_id === action.itemId
+              ? { ...item, ...action.updates }
+              : item
+          ),
+        },
+      }
+    }
+
     case 'SELECT_ALL': {
       if (!state.pool) return state
       return {
@@ -277,6 +293,8 @@ interface EvidenceGatheringContextValue {
   evidencePool: EvidencePool | null
   sessionId: string | null
   toggleItem: (itemId: string) => void
+  /** Update editable fields on a single evidence item via PATCH, then sync local state. */
+  updateItem: (sessionId: string, itemId: string, updates: { claim?: string; confidence?: string; category?: string }) => Promise<void>
   selectAll: () => void
   deselectAll: () => void
   selectByFilter: (filter: 'high-confidence' | 'research' | 'decomposition' | 'user' | 'document') => void
@@ -361,6 +379,20 @@ export function EvidenceGatheringProvider({ children }: { children: ReactNode })
     dispatch({ type: 'SET_PREBUILT_POOL', pool, sessionId })
   }, [])
 
+  const updateItem = useCallback(async (
+    sessionId: string,
+    itemId: string,
+    updates: { claim?: string; confidence?: string; category?: string },
+  ) => {
+    if (!client) return
+    try {
+      const updated = await client.updateEvidenceItem(sessionId, itemId, updates)
+      dispatch({ type: 'UPDATE_ITEM', itemId, updates: updated })
+    } catch (err) {
+      console.error('Failed to update evidence item:', err)
+    }
+  }, [client])
+
   const reset = useCallback(() => {
     wsRef.current?.disconnect()
     wsRef.current = null
@@ -386,6 +418,7 @@ export function EvidenceGatheringProvider({ children }: { children: ReactNode })
     evidencePool: state.pool,
     sessionId: state.sessionId,
     toggleItem,
+    updateItem,
     selectAll,
     deselectAll,
     selectByFilter,

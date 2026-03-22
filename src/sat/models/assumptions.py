@@ -39,6 +39,10 @@ class AssumptionRow(BaseModel):
     impact_if_wrong: str = Field(
         description="Consequences for the analysis if this assumption proves incorrect"
     )
+    evidence_references: list[str] = Field(
+        default_factory=list,
+        description="IDs of evidence items that support or relate to this assumption (e.g., D-F1, R-C3)",
+    )
 
 
 class KeyAssumptionsResult(ArtifactResult):

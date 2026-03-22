@@ -21,6 +21,17 @@ research provider and passes the resolved key to the constructor. This matches t
 approach LLM providers already use via ProviderConfig.resolve_api_key(). The provider
 constructors' existing fallback (api_key or os.environ.get(...)) still handles env-var-only
 configurations, preserving backward compatibility.
+
+@decision DEC-MODELS-003
+@title Research providers accept model override from config in discover_providers()
+@status accepted
+@rationale discover_providers() now also passes model=_load_config_file_research_model(provider)
+to each deep research provider constructor. This ensures that when a user configures a
+research_model in ~/.sat/config.json via the Settings UI, it is explicitly forwarded through
+the multi-runner path. The provider constructors already resolve their own model via
+resolve_research_model() as a fallback, so passing None here is safe and backward compatible.
+Explicit wiring in discover_providers() gives callers visibility into which model is being used
+without having to inspect each provider's internal state.
 """
 
 from __future__ import annotations
@@ -28,7 +39,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from sat.config import _load_config_file_key
+from sat.config import _load_config_file_key, _load_config_file_research_model
 from sat.errors import is_transient_error
 from sat.events import (
     EventBus,
@@ -71,13 +82,17 @@ def discover_providers(
     Priority: deep research providers + brave (always attempted), then LLM fallback
     only when nothing else is available.
 
-    API key resolution order per provider:
-    1. ~/.sat/config.json (populated by Settings UI)
-    2. Environment variable (legacy / CLI workflow)
+    Resolution order per provider:
+    1. API key: ~/.sat/config.json > environment variable
+    2. Model: ~/.sat/config.json research_model field > PROVIDER_RESEARCH_MODEL env var
+              > built-in default (resolved via each provider's constructor)
 
-    The provider constructors themselves implement the env-var fallback
-    (api_key or os.environ.get(...)), so passing None here is safe when no
-    config-file key is found — the constructor will try the env var itself.
+    The provider constructors implement the full model resolution chain via
+    resolve_research_model(). Passing model=_load_config_file_research_model(provider)
+    here explicitly promotes the config-file value to the highest-priority slot,
+    so the Settings UI model preference takes effect without relying on the
+    provider's internal resolution (DEC-MODELS-003). Passing None is safe when
+    no config-file model is set — the constructor falls back to env var then default.
     """
     providers: list[tuple[str, ResearchProvider]] = []
 
@@ -86,7 +101,13 @@ def discover_providers(
         from sat.research.openai_deep import OpenAIDeepResearchProvider
 
         providers.append(
-            ("openai_deep", OpenAIDeepResearchProvider(api_key=_load_config_file_key("openai")))
+            (
+                "openai_deep",
+                OpenAIDeepResearchProvider(
+                    api_key=_load_config_file_key("openai"),
+                    model=_load_config_file_research_model("openai"),
+                ),
+            )
         )
         logger.info("OpenAI deep research: available")
     except (ValueError, ImportError):
@@ -96,7 +117,13 @@ def discover_providers(
         from sat.research.perplexity import PerplexityProvider
 
         providers.append(
-            ("perplexity", PerplexityProvider(api_key=_load_config_file_key("perplexity")))
+            (
+                "perplexity",
+                PerplexityProvider(
+                    api_key=_load_config_file_key("perplexity"),
+                    model=_load_config_file_research_model("perplexity"),
+                ),
+            )
         )
         logger.info("Perplexity deep research: available")
     except (ValueError, ImportError):
@@ -106,7 +133,13 @@ def discover_providers(
         from sat.research.gemini_deep import GeminiDeepResearchProvider
 
         providers.append(
-            ("gemini_deep", GeminiDeepResearchProvider(api_key=_load_config_file_key("gemini")))
+            (
+                "gemini_deep",
+                GeminiDeepResearchProvider(
+                    api_key=_load_config_file_key("gemini"),
+                    model=_load_config_file_research_model("gemini"),
+                ),
+            )
         )
         logger.info("Gemini deep research: available")
     except (ValueError, ImportError):
@@ -116,9 +149,7 @@ def discover_providers(
     try:
         from sat.research.brave import BraveProvider
 
-        providers.append(
-            ("brave", BraveProvider(api_key=_load_config_file_key("brave")))
-        )
+        providers.append(("brave", BraveProvider(api_key=_load_config_file_key("brave"))))
         logger.info("Brave search: available")
     except (ValueError, ImportError):
         logger.debug("Brave search: unavailable (no API key)")

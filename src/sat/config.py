@@ -242,7 +242,9 @@ class ProviderConfig(BaseModel):
     model: str | None = Field(
         default=None, description="Model identifier (defaults to env var or built-in per provider)"
     )
-    api_key: str | None = Field(default=None, description="API key (falls back to config file then env var)")
+    api_key: str | None = Field(
+        default=None, description="API key (falls back to config file then env var)"
+    )
     max_tokens: int = Field(default=16384, description="Max tokens per LLM call")
     temperature: float = Field(default=0.3, description="LLM temperature")
     base_url: str | None = Field(default=None, description="Custom API base URL")
@@ -318,6 +320,14 @@ class VerificationConfig(BaseModel):
     concurrency: int = Field(default=10, description="Max concurrent fetches")
 
 
+class GapResolutionConfig(BaseModel):
+    """Configuration for iterative gap-driven research."""
+
+    enabled: bool = Field(default=True, description="Enable gap resolution after initial research")
+    max_iterations: int = Field(default=2, description="Maximum gap resolution iterations")
+    max_sources_per_iteration: int = Field(default=5, description="Max sources per follow-up query")
+
+
 class ResearchConfig(BaseModel):
     """Configuration for deep research phase."""
 
@@ -332,6 +342,10 @@ class ResearchConfig(BaseModel):
     verification: "VerificationConfig" = Field(
         default_factory=lambda: VerificationConfig(),
         description="Source verification configuration",
+    )
+    gap_resolution: "GapResolutionConfig" = Field(
+        default_factory=lambda: GapResolutionConfig(),
+        description="Gap-driven iterative research configuration",
     )
 
 

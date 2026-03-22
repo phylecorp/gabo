@@ -24,6 +24,7 @@ import time
 
 from sat.adversarial.config import AdversarialConfig
 from sat.adversarial.pool import ProviderPool
+from sat.models.evidence import TechniqueEvidence
 from sat.models.adversarial import (
     AdjudicationResult,
     AdversarialExchange,
@@ -56,7 +57,7 @@ class AdversarialSession:
         self,
         technique_result: ArtifactResult,
         question: str,
-        evidence: str | None = None,
+        evidence: TechniqueEvidence | str | None = None,
     ) -> AdversarialExchange:
         """Run adversarial analysis on a single technique's output.
 
@@ -78,7 +79,7 @@ class AdversarialSession:
         self,
         technique_result: ArtifactResult,
         question: str,
-        evidence: str | None = None,
+        evidence: TechniqueEvidence | str | None = None,
     ) -> AdversarialExchange:
         """Run dual-mode adversarial analysis: N rounds of critique-rebuttal, optional adjudication."""
         challenger = self._pool.get_challenger()
@@ -86,6 +87,7 @@ class AdversarialSession:
         rounds: list[DebateRound] = []
 
         last_critique: CritiqueResult | None = None
+        evidence_text = evidence.as_text() if hasattr(evidence, "as_text") else evidence
 
         for round_num in range(1, self._config.rounds + 1):
             logger.info(
@@ -105,7 +107,7 @@ class AdversarialSession:
             critique_prompt, critique_msgs = build_critique_prompt(
                 technique_result=technique_result,
                 question=question,
-                evidence=evidence,
+                evidence=evidence_text,
             )
             critique = await challenger.generate_structured(
                 system_prompt=critique_prompt,
@@ -135,7 +137,7 @@ class AdversarialSession:
                 technique_result=technique_result,
                 critique=critique,
                 question=question,
-                evidence=evidence,
+                evidence=evidence_text,
             )
             rebuttal = await primary.generate_structured(
                 system_prompt=rebuttal_prompt,
@@ -173,7 +175,7 @@ class AdversarialSession:
                     critique=last_critique,
                     rebuttal=last_rebuttal,
                     question=question,
-                    evidence=evidence,
+                    evidence=evidence_text,
                 )
                 adjudication = await adjudicator.generate_structured(
                     system_prompt=adj_prompt,
@@ -199,7 +201,7 @@ class AdversarialSession:
         self,
         technique_result: ArtifactResult,
         question: str,
-        evidence: str | None = None,
+        evidence: TechniqueEvidence | str | None = None,
     ) -> AdversarialExchange:
         """Run trident-mode adversarial analysis: parallel critique+investigation,
         rebuttal, convergence, enhanced adjudication.
@@ -223,6 +225,7 @@ class AdversarialSession:
         )
         t0 = time.monotonic()
 
+        evidence_text = evidence.as_text() if hasattr(evidence, "as_text") else evidence
         technique = get_technique(technique_result.technique_id)
         inv_ctx = TechniqueContext(question=question, evidence=evidence)
 
@@ -230,7 +233,7 @@ class AdversarialSession:
             critique_prompt, critique_msgs = build_critique_prompt(
                 technique_result=technique_result,
                 question=question,
-                evidence=evidence,
+                evidence=evidence_text,
             )
             result = await challenger.generate_structured(
                 system_prompt=critique_prompt,
@@ -273,7 +276,7 @@ class AdversarialSession:
             technique_result=technique_result,
             critique=critique_result,
             question=question,
-            evidence=evidence,
+            evidence=evidence_text,
         )
         rebuttal_result = await primary.generate_structured(
             system_prompt=rebuttal_prompt,
@@ -304,7 +307,7 @@ class AdversarialSession:
             critique=critique_result,
             rebuttal=rebuttal_result,
             question=question,
-            evidence=evidence,
+            evidence=evidence_text,
         )
         convergence = await primary.generate_structured(
             system_prompt=conv_prompt,
@@ -325,7 +328,7 @@ class AdversarialSession:
             critique=critique_result,
             rebuttal=rebuttal_result,
             question=question,
-            evidence=evidence,
+            evidence=evidence_text,
             investigator_result=inv_result,
             convergence=convergence,
         )

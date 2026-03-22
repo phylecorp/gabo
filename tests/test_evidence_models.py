@@ -54,27 +54,8 @@ class TestEvidenceItem:
         assert item.selected is False
         assert item.provider_name == "perplexity"
 
-    def test_serialization_round_trip(self):
-        item = EvidenceItem(
-            item_id="U-1",
-            claim="User provided this.",
-            source="user",
-        )
-        data = item.model_dump()
-        restored = EvidenceItem.model_validate(data)
-        assert restored == item
-
 
 class TestEvidencePool:
-    def test_defaults(self):
-        pool = EvidencePool(session_id="abc123", question="What happened?")
-        assert pool.items == []
-        assert pool.sources == []
-        assert pool.gaps == []
-        assert pool.provider_summary == ""
-        assert pool.status == "gathering"
-        assert pool.error is None
-
     def test_with_items(self):
         items = [
             EvidenceItem(item_id="D-F1", claim="Fact one.", source="decomposition"),

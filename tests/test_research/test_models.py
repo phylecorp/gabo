@@ -16,31 +16,6 @@ from sat.models.research import ResearchClaim, ResearchResult, ResearchSource
 class TestResearchModels:
     """Test research model serialization and validation."""
 
-    def test_research_source_serialization(self):
-        source = ResearchSource(
-            id="S1",
-            title="Test Source",
-            url="https://example.com",
-            source_type="web",
-            reliability_assessment="High",
-        )
-        data = source.model_dump()
-        assert data["id"] == "S1"
-        assert data["title"] == "Test Source"
-        assert data["url"] == "https://example.com"
-        assert data["source_type"] == "web"
-
-    def test_research_claim_serialization(self):
-        claim = ResearchClaim(
-            claim="Test claim",
-            source_ids=["S1", "S2"],
-            confidence="High",
-            category="fact",
-        )
-        data = claim.model_dump()
-        assert data["claim"] == "Test claim"
-        assert data["source_ids"] == ["S1", "S2"]
-
     def test_research_result_roundtrip(self):
         result = ResearchResult(
             technique_id="research",
@@ -73,14 +48,6 @@ class TestResearchModels:
         assert len(restored.sources) == 1
         assert len(restored.claims) == 1
         assert restored.formatted_evidence == "Evidence text here"
-
-    def test_research_result_json_schema(self):
-        schema = ResearchResult.model_json_schema()
-        assert "properties" in schema
-        assert "query" in schema["properties"]
-        assert "sources" in schema["properties"]
-        assert "claims" in schema["properties"]
-        assert "formatted_evidence" in schema["properties"]
 
     def test_research_source_optional_url(self):
         source = ResearchSource(

@@ -395,6 +395,8 @@ class ArtifactWriter:
         )
 
         manifest_path = self.output_dir / "manifest.json"
+        # Ensure directory exists before writing
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(
             manifest.model_dump_json(indent=2),
             encoding="utf-8",

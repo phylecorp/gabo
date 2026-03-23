@@ -315,6 +315,7 @@ Environment variables for MCP configuration are documented in `.env.example`.
 | `anthropic` (default) | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
 | `openai` | `OPENAI_API_KEY` | `o3` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-pro` |
+| `copilot` | (none required) | `copilot-gpt-4` |
 
 ### Research providers
 

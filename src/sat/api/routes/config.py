@@ -237,11 +237,13 @@ async def _test_provider_connection(req: TestProviderRequest) -> TestProviderRes
             return TestProviderResponse(success=True, model_used=model)
 
         elif provider == "gemini":
-            import google.generativeai as genai  # type: ignore[import]
+            from google import genai
 
-            genai.configure(api_key=req.api_key)
-            gmodel = genai.GenerativeModel(model)
-            gmodel.generate_content("Say hello")
+            client = genai.Client(api_key=req.api_key)
+            client.models.generate_content(
+                model=model,
+                contents="Say hello",
+            )
             return TestProviderResponse(success=True, model_used=model)
 
         elif provider == "perplexity":

@@ -375,6 +375,61 @@ class TestTestProviderUnknown:
 # ---------------------------------------------------------------------------
 
 
+class TestTestProviderGemini:
+    """Verify the Gemini test-provider handler uses the google.genai SDK (not google.generativeai).
+
+    # @mock-exempt: google.genai.Client — external Gemini API; requires real credentials + network
+    """
+
+    def test_gemini_success_returns_model_used(self, client, tmp_config):
+        """A mocked successful Gemini call returns success=True with the requested model."""
+        mock_client = MagicMock()
+        with patch("google.genai.Client", return_value=mock_client):
+            resp = client.post(
+                "/api/config/test-provider",
+                json={"provider": "gemini", "api_key": "AI-fakekey12345", "model": "gemini-2.0-flash"},
+            )
+        body = resp.json()
+        assert body["success"] is True
+        assert body["model_used"] == "gemini-2.0-flash"
+
+    def test_gemini_uses_new_sdk_client(self, client, tmp_config):
+        """The handler must construct a google.genai.Client (new SDK), not use google.generativeai."""
+        mock_client = MagicMock()
+        with patch("google.genai.Client", return_value=mock_client) as mock_cls:
+            client.post(
+                "/api/config/test-provider",
+                json={"provider": "gemini", "api_key": "AI-fakekey12345", "model": "gemini-2.0-flash"},
+            )
+        # Client must have been constructed with the api_key
+        mock_cls.assert_called_once()
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs.get("api_key") == "AI-fakekey12345"
+
+    def test_gemini_calls_generate_content_on_models(self, client, tmp_config):
+        """generate_content must be called via client.models (new SDK pattern)."""
+        mock_client = MagicMock()
+        with patch("google.genai.Client", return_value=mock_client):
+            client.post(
+                "/api/config/test-provider",
+                json={"provider": "gemini", "api_key": "AI-fakekey12345", "model": "gemini-2.0-flash"},
+            )
+        mock_client.models.generate_content.assert_called_once()
+
+    def test_gemini_auth_error_returns_failure(self, client, tmp_config):
+        """API key errors propagate as success=False with a non-empty error message."""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = Exception("API key not valid")
+        with patch("google.genai.Client", return_value=mock_client):
+            resp = client.post(
+                "/api/config/test-provider",
+                json={"provider": "gemini", "api_key": "bad-key", "model": "gemini-2.0-flash"},
+            )
+        body = resp.json()
+        assert body["success"] is False
+        assert body["error"]
+
+
 class TestListProvidersResearch:
     def test_brave_in_provider_list(self, client, tmp_config):
         resp = client.get("/api/config/providers")

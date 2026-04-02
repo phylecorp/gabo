@@ -66,6 +66,7 @@ const initialProgress: RunProgress = {
   currentTechnique: null,
   completedStages: [],
   researchProviders: {},
+  researchPollStatus: {},
   error: null,
   outputDir: null,
 }
@@ -105,6 +106,25 @@ function progressReducer(state: RunProgress, action: Action): RunProgress {
           return { ...next, researchProviders: { ...state.researchProviders, [event.data.name]: 'completed' } }
         case 'ProviderFailed':
           return { ...next, researchProviders: { ...state.researchProviders, [event.data.name]: 'failed' } }
+        case 'ProviderPolling':
+          return {
+            ...next,
+            researchProviders: {
+              ...state.researchProviders,
+              // Only update status to 'polling' if provider is still running (not completed/failed)
+              [event.data.name]: state.researchProviders[event.data.name] === 'completed' || state.researchProviders[event.data.name] === 'failed'
+                ? state.researchProviders[event.data.name]
+                : 'polling',
+            },
+            researchPollStatus: {
+              ...state.researchPollStatus,
+              [event.data.name]: {
+                attempt: event.data.attempt as number,
+                maxAttempts: event.data.max_attempts as number,
+                status: (event.data.status as string) || '',
+              },
+            },
+          }
         case 'ResearchCompleted':
           return { ...next, completedStages: [...state.completedStages, 'research'] }
         case 'run_completed':
@@ -194,7 +214,9 @@ export default function RunDetail() {
     dispatch({ type: 'CONNECTING' })
     setWsConnected(true)
     setWsDisconnected(false)
-    const ws = new AnalysisWebSocket(`${wsBaseUrl}/ws/analysis/${runId}`, false)
+    const rawWsUrl = `${wsBaseUrl}/ws/analysis/${runId}`
+    const wsUrl = client ? client.buildWsUrl(rawWsUrl) : rawWsUrl
+    const ws = new AnalysisWebSocket(wsUrl, false)
     ws.onEvent(event => dispatch({ type: 'EVENT', event }))
     ws.onDisconnect(() => setWsDisconnected(true))
     ws.connect()
@@ -465,6 +487,20 @@ export default function RunDetail() {
               </button>
             </>
           )}
+          {isComplete && run && run.evidence_provided && run.evidence_path && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => navigate('/new', { state: { prefill: {
+                question: run.question,
+                techniques: run.techniques_selected,
+                adversarialEnabled: run.adversarial_enabled,
+                priorRunId: run.run_id,
+              }}})}
+            >
+              Re-analyze with Evidence
+            </button>
+          )}
           {isFailed && run && (
             <button
               type="button"
@@ -473,6 +509,7 @@ export default function RunDetail() {
                 question: run.question,
                 techniques: run.techniques_selected,
                 adversarialEnabled: run.adversarial_enabled,
+                ...(run.evidence_provided ? { priorRunId: run.run_id } : {}),
               }}})}
             >
               Re-run Analysis
@@ -528,12 +565,21 @@ export default function RunDetail() {
                 RESEARCH PROVIDERS
               </span>
               <div className="run-detail-providers-list">
-                {Object.entries(liveProgress.researchProviders).map(([name, pStatus]) => (
-                  <div key={name} className="provider-status-item">
-                    <span className={`status-dot status-dot-${pStatus === 'completed' ? 'ok' : pStatus === 'failed' ? 'error' : 'warn'}`} />
-                    <span className="text-xs text-secondary">{name}</span>
-                  </div>
-                ))}
+                {Object.entries(liveProgress.researchProviders).map(([name, pStatus]) => {
+                  const poll = liveProgress.researchPollStatus?.[name]
+                  const dotClass = pStatus === 'completed' ? 'ok' : pStatus === 'failed' ? 'error' : 'warn'
+                  return (
+                    <div key={name} className="provider-status-item">
+                      <span className={`status-dot status-dot-${dotClass}`} />
+                      <span className="text-xs text-secondary">{name}</span>
+                      {poll && pStatus !== 'completed' && pStatus !== 'failed' && (
+                        <span className="text-xs text-muted font-mono">
+                          {poll.attempt}/{poll.maxAttempts}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}

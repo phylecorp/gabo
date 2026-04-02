@@ -128,6 +128,16 @@ export default function EvidenceDetail() {
           <span className={`intel-badge ${pool.status === 'ready' ? 'badge-green' : pool.status === 'failed' ? 'badge-red' : 'badge-cyan'}`}>
             {pool.status}
           </span>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => navigate('/new', { state: { prefill: {
+              question: pool.question || '',
+              priorRunId: runId,
+            }}})}
+          >
+            Re-analyze with this Evidence
+          </button>
         </div>
       </div>
 

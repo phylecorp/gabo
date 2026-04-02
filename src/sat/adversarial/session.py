@@ -114,6 +114,7 @@ class AdversarialSession:
                 messages=critique_msgs,
                 output_schema=CritiqueResult,
                 max_tokens=16384,
+                temperature=0.8,  # Higher temperature for creative adversarial critique
             )
             assert isinstance(critique, CritiqueResult)
             last_critique = critique
@@ -144,6 +145,7 @@ class AdversarialSession:
                 messages=rebuttal_msgs,
                 output_schema=RebuttalResult,
                 max_tokens=16384,
+                temperature=0.8,  # Higher temperature for creative adversarial rebuttal
             )
             assert isinstance(rebuttal, RebuttalResult)
             logger.info(
@@ -240,6 +242,7 @@ class AdversarialSession:
                 messages=critique_msgs,
                 output_schema=CritiqueResult,
                 max_tokens=16384,
+                temperature=0.8,  # Higher temperature for creative adversarial critique
             )
             assert isinstance(result, CritiqueResult)
             logger.info(
@@ -283,6 +286,7 @@ class AdversarialSession:
             messages=rebuttal_msgs,
             output_schema=RebuttalResult,
             max_tokens=16384,
+            temperature=0.8,  # Higher temperature for creative adversarial rebuttal
         )
         assert isinstance(rebuttal_result, RebuttalResult)
         logger.info("Trident Phase 2: done in %.1fs", time.monotonic() - t0)

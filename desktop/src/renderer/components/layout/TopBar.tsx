@@ -10,6 +10,7 @@ import { useConcurrencyStatus } from '../../hooks/useRuns'
 const titles: Record<string, string> = {
   '/': 'Dashboard',
   '/new': 'New Analysis',
+  '/about': 'About SAT',
 }
 
 export default function TopBar() {

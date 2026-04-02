@@ -13,6 +13,18 @@ property on Technique (default None = use provider default) lets individual
 techniques declare their needs without coupling the base class to any specific
 limit. execute() passes it through to generate_structured() only when set,
 leaving the default unchanged for techniques that don't override.
+
+@decision DEC-TEMP-001
+@title Per-technique temperature: creative=0.9, analytical=default, adversarial critique=0.8
+@status accepted
+@rationale Creative techniques (brainstorming, red team, alt futures, outside_in, devils
+  advocacy, team A/B, what-if, high-impact) need higher temperature for divergent thinking.
+  Analytical techniques (ACH, quality check, key assumptions, indicators) need low temperature
+  for precise, consistent output. The provider default (0.3) was being used for all techniques,
+  actively suppressing creative output quality. A temperature property on Technique
+  (default None = use provider default) lets individual techniques declare their needs.
+  execute() passes it through to generate_structured() only when set, leaving the default
+  unchanged for techniques that don't override.
 """
 
 from __future__ import annotations
@@ -71,6 +83,16 @@ class Technique(ABC):
         """
         return None
 
+    @property
+    def temperature(self) -> float | None:
+        """LLM temperature for this technique. None = use provider default (0.3).
+
+        Creative techniques (imaginative + contrarian categories) override this to 0.9
+        to enable divergent thinking. Analytical techniques (diagnostic category) leave
+        this as None so they run at the precise provider default (0.3).
+        """
+        return None
+
     def build_prompt(self, ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         """Build the system prompt and user messages for this technique.
 
@@ -110,6 +132,8 @@ class Technique(ABC):
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
         result = await provider.generate_structured(**kwargs)
         result = self.post_process(result)
         # Framework controls identity — not the LLM.

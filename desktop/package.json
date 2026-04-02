@@ -8,9 +8,13 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
-    "build:sidecar": "pyinstaller --name sat-api --onefile ../src/sat/api/app.py",
+    "build:sidecar": "pyinstaller desktop/sat-api.spec --distpath desktop/pyinstaller/dist --workpath desktop/pyinstaller/build",
+    "build:sidecar:mac": "pyinstaller ../desktop/sat-api.spec --distpath pyinstaller/dist --workpath pyinstaller/build",
+    "build:sidecar:win": "pyinstaller ../desktop/sat-api.spec --distpath pyinstaller/dist --workpath pyinstaller/build",
     "build:mac": "npm run build && electron-builder --mac",
     "build:mac:dir": "npm run build && electron-builder --mac --dir",
+    "dist:mac": "npm run build:sidecar:mac && npm run build && electron-builder --mac",
+    "dist:win": "npm run build:sidecar:win && npm run build && electron-builder --win",
     "audit": "npm audit --audit-level=moderate"
   },
   "dependencies": {

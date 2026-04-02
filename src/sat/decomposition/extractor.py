@@ -6,10 +6,22 @@
 @rationale Large evidence is chunked and processed iteratively. Each chunk sees prior
 facts to avoid re-extraction. Facts get sequential IDs (F1, F2, ...). Output is
 formatted as structured text that replaces config.evidence for downstream techniques.
+
+@decision DEC-DECOMP-005: Parallel batch extraction replaces sequential chunk processing.
+@title Batched asyncio.gather for chunk parallelism
+@status accepted
+@rationale Sequential extraction was the bottleneck for large evidence — each chunk
+waited for the previous LLM call to complete. Chunks are now processed in parallel
+batches of _DECOMP_BATCH_SIZE=4. Prior-facts context is dropped per chunk (was 20
+recent facts) because the deduplication pass (line ~155) already handles overlapping
+claims across chunks. This trades minor duplication increase for a 4x throughput
+improvement on multi-chunk evidence. Failures in individual chunks are swallowed
+per the existing graceful-degradation contract.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections import defaultdict
@@ -24,6 +36,11 @@ from sat.models.decomposition import AtomicFact, DecompositionResult
 from sat.preprocessing.reducer import chunk_text
 
 logger = logging.getLogger(__name__)
+
+# Number of chunks to process concurrently. Higher values reduce wall-clock time
+# but increase concurrent LLM API load. 4 is a conservative default that avoids
+# rate-limit pressure while still delivering meaningful parallelism.
+_DECOMP_BATCH_SIZE = 4
 
 _SOURCE_MARKER = re.compile(r"^--- Source: (.+) ---$", re.MULTILINE)
 
@@ -100,6 +117,30 @@ def _format_facts(facts: list[AtomicFact], source_index: str) -> str:
     return "\n".join(lines)
 
 
+async def _extract_chunk(
+    chunk: str,
+    source_index_str: str,
+    provider: object,
+) -> list[AtomicFact]:
+    """Extract facts from a single chunk, returning an empty list on failure.
+
+    Prior-facts context is intentionally omitted — parallel batches cannot share
+    sequential state. The deduplication pass in decompose_evidence cleans up any
+    overlapping claims across chunks.
+    """
+    system_prompt, messages = build_decomposition_prompt(chunk, [], source_index_str)
+    try:
+        result: ChunkExtractionResult = await provider.generate_structured(  # type: ignore[union-attr]
+            system_prompt=system_prompt,
+            messages=messages,
+            output_schema=ChunkExtractionResult,
+        )
+        return list(result.facts)
+    except Exception as exc:
+        logger.warning("Fact extraction failed for chunk: %s", exc)
+        return []
+
+
 async def decompose_evidence(
     evidence: str,
     provider: object,
@@ -107,9 +148,10 @@ async def decompose_evidence(
 ) -> DecompositionResult:
     """Decompose evidence text into atomic facts.
 
-    Chunks large evidence, extracts facts from each chunk sequentially (with
-    prior-facts context to avoid re-extraction), optionally deduplicates, and
-    formats the result as structured text.
+    Chunks large evidence, extracts facts from each chunk in parallel batches of
+    _DECOMP_BATCH_SIZE, optionally deduplicates, and formats the result as
+    structured text. Prior-facts context is dropped per chunk — the dedup pass
+    handles overlapping claims across concurrent extractions.
 
     Args:
         evidence: The evidence text to decompose.
@@ -128,23 +170,17 @@ async def decompose_evidence(
     all_facts: list[AtomicFact] = []
     fact_counter = 1
 
-    for chunk in chunks:
-        prior_fact_strs = [f"[{f.fact_id}] {f.claim}" for f in all_facts[-20:]]
-        system_prompt, messages = build_decomposition_prompt(
-            chunk, prior_fact_strs, source_index_str
+    # Process chunks in parallel batches; stop early if max_facts reached.
+    for batch_start in range(0, len(chunks), _DECOMP_BATCH_SIZE):
+        batch = chunks[batch_start : batch_start + _DECOMP_BATCH_SIZE]
+        batch_results = await asyncio.gather(
+            *[_extract_chunk(chunk, source_index_str, provider) for chunk in batch]
         )
-        try:
-            result: ChunkExtractionResult = await provider.generate_structured(  # type: ignore[union-attr]
-                system_prompt=system_prompt,
-                messages=messages,
-                output_schema=ChunkExtractionResult,
-            )
-            for fact in result.facts:
+        for facts in batch_results:
+            for fact in facts:
                 fact.fact_id = f"F{fact_counter}"
                 fact_counter += 1
                 all_facts.append(fact)
-        except Exception as exc:
-            logger.warning("Fact extraction failed for chunk: %s", exc)
 
         if len(all_facts) >= config.max_facts:
             break

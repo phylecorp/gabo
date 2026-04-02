@@ -49,7 +49,7 @@ class AnalysisRequest(BaseModel):
     name: _Name = None
     evidence: _Evidence = None
     techniques: _Techniques = None  # None = auto-select
-    output_dir: str = "."
+    output_dir: str | None = None  # None → get_default_runs_dir() in the route
     provider: str = "anthropic"
     model: str | None = None
     research_enabled: bool = False
@@ -231,6 +231,19 @@ class UpdateEvidenceItemRequest(BaseModel):
     category: str | None = None
 
 
+class CreateEvidenceItemRequest(BaseModel):
+    """Request to manually add a new evidence item during curation.
+
+    Allows users to inject their own evidence during the Gather & Review stage
+    alongside items surfaced by research or document ingestion. The item is
+    assigned a sequential M-N identifier and source='manual'.
+    """
+
+    claim: str = Field(..., min_length=1, max_length=5000)
+    confidence: str = Field(default="Medium")
+    category: str = Field(default="fact")
+
+
 class PoolRequest(BaseModel):
     """Request body for POST /api/evidence/pool.
 
@@ -251,3 +264,24 @@ class PoolResponse(BaseModel):
 
     session_id: str
     pool: EvidencePool
+
+
+class TemplateInfo(BaseModel):
+    """Metadata for a single report template (default or custom).
+
+    Custom templates live in ~/.sat/templates/; default templates are bundled
+    with the package in src/sat/report/templates/.
+    """
+
+    filename: str
+    size: int
+    modified: str
+    is_custom: bool
+
+
+class TemplateUploadResponse(BaseModel):
+    """Response for POST /api/config/templates/upload."""
+
+    filename: str
+    size: int
+    status: str

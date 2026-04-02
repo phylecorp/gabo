@@ -16,9 +16,23 @@
  *   is guaranteed to be available (the line is printed before uvicorn starts
  *   accepting connections). getSidecarToken() returns the captured token or
  *   empty string if auth is disabled / not yet received.
+ *
+ * @decision DEC-BUILD-003
+ * @title Platform-conditional sidecar path resolution using process.resourcesPath and process.platform
+ * @status accepted
+ * @rationale When app.isPackaged is true, the PyInstaller binary lives at
+ *   <resourcesPath>/sidecar/sat-api/sat-api[.exe]. In dev mode, we spawn
+ *   python -m sat.api.main directly. getSidecarPath is a pure function that
+ *   accepts (isPackaged, platform, resourcesPath) so it can be unit-tested
+ *   without mocking Electron globals. On missing binary in packaged mode, a
+ *   user-friendly error dialog is shown before app.quit() to prevent silent
+ *   failures on end-user machines.
  */
 import { spawn, ChildProcess } from 'child_process'
+import * as fs from 'fs'
 import * as net from 'net'
+import { app, dialog } from 'electron'
+import { getSidecarPath } from './sidecar-path'
 
 let sidecarProcess: ChildProcess | null = null
 let sidecarPort: number = 0
@@ -57,10 +71,44 @@ export async function startSidecar(): Promise<void> {
   sidecarPort = await findFreePort()
   sidecarToken = ''
 
-  sidecarProcess = spawn('python', ['-m', 'sat.api.main', '--port', String(sidecarPort)], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env }
+  const portStr = String(sidecarPort)
+
+  // process.resourcesPath is set by Electron in packaged mode; empty string is
+  // safe here because getSidecarPath returns '' when isPackaged is false.
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath ?? ''
+  const sidecarBinaryPath = getSidecarPath({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    resourcesPath,
   })
+
+  if (app.isPackaged) {
+    // Packaged mode: spawn the PyInstaller binary directly.
+    // Check existence first to give a clear error rather than a cryptic spawn failure.
+    if (!fs.existsSync(sidecarBinaryPath)) {
+      dialog.showErrorBox(
+        'SAT Error',
+        `Sidecar binary not found at:\n${sidecarBinaryPath}\n\nThe application bundle may be incomplete. Please reinstall.`
+      )
+      app.quit()
+      return
+    }
+
+    sidecarProcess = spawn(sidecarBinaryPath, ['--port', portStr], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Inherit parent environment so API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+      // GEMINI_API_KEY, BRAVE_API_KEY, PERPLEXITY_API_KEY, etc.) flow through
+      // from the user's system environment. Node spawn inherits env by default
+      // but we spread explicitly for clarity and to allow future overrides.
+      env: { ...process.env },
+    })
+  } else {
+    // Dev mode: unchanged — spawn python -m sat.api.main
+    sidecarProcess = spawn('python', ['-m', 'sat.api.main', '--port', portStr], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env }
+    })
+  }
 
   sidecarProcess.stdout?.on('data', (data: Buffer) => {
     const text = data.toString()

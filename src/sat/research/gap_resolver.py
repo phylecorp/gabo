@@ -11,11 +11,27 @@ merging new findings. Capped at max_iterations (default 2) to control token cost
 Each iteration may identify new gaps; the loop terminates when no gaps remain or the
 cap is reached. Graceful degradation: any failure at any stage stops iteration and
 returns the best result accumulated so far — never crashes the pipeline.
+
+@decision DEC-RESEARCH-014
+@title Parallel gap resolution replaces sequential iteration
+@status accepted
+@rationale The original sequential loop required N×(research + structure) wall-clock
+time for N gaps. The new approach generates all follow-up queries in a single LLM call
+(one query per actionable gap), then fans out research and structuring concurrently via
+asyncio.gather. max_iterations now caps the number of parallel queries rather than
+sequential iterations. This preserves the token-cost contract while delivering
+sub-linear latency scaling with gap count. Graceful degradation is preserved: failed
+individual query coroutines are swallowed and do not crash the pipeline. The final
+merge deduplicates across all concurrent results, so overlapping findings are handled
+identically to the prior sequential approach.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+
+from pydantic import BaseModel, Field
 
 from sat.events import EventBus, NullBus, StageCompleted, StageStarted
 from sat.models.research import ResearchClaim, ResearchResult, ResearchSource
@@ -25,7 +41,7 @@ from sat.research.structurer import structure_evidence
 
 logger = logging.getLogger(__name__)
 
-GAP_QUERY_SYSTEM = """You are a research gap analyst. Given a list of information gaps identified during prior research, generate a focused search query that will address the most important gaps.
+GAP_QUERY_SYSTEM = """You are a research gap analyst. Given a list of information gaps identified during prior research, generate focused search queries that will address the most important gaps — one query per actionable gap.
 
 Prioritize:
 1. Gaps that would most materially change the analysis if resolved
@@ -34,7 +50,64 @@ Prioritize:
 
 Skip gaps that are inherently unanswerable (e.g., classified information, future predictions).
 
-Respond with ONLY the search query text, nothing else. If no actionable gaps exist, respond with "NO_ACTIONABLE_GAPS"."""
+Return a JSON object with a "queries" field containing a list of query strings. Each string should be a focused search query for one gap. If no actionable gaps exist, return {"queries": []}."""
+
+
+class GapQueries(BaseModel):
+    """Structured output for batch gap query generation.
+
+    A single LLM call returns all follow-up queries at once, enabling
+    concurrent research execution rather than sequential iteration.
+    """
+
+    queries: list[str] = Field(
+        default_factory=list,
+        description="One search query per actionable gap, in priority order.",
+    )
+
+
+async def _resolve_single_gap(
+    query: str,
+    current: ResearchResult,
+    research_provider: ResearchProvider,
+    llm_provider: LLMProvider,
+    max_sources: int,
+    query_index: int,
+) -> tuple[list[ResearchClaim], list[ResearchSource], str | None]:
+    """Run research + structuring for a single follow-up query.
+
+    Returns (new_claims, new_sources, error_message). On any failure,
+    returns empty lists and a non-None error string — callers must not crash.
+    """
+    try:
+        raw_response = await research_provider.research(
+            query=query,
+            context=f"Follow-up research for gaps in: {current.query}",
+            max_sources=max_sources,
+        )
+    except Exception as exc:
+        logger.warning("Gap follow-up research failed for query %d: %s", query_index + 1, exc)
+        return [], [], str(exc)
+
+    if not raw_response.content.strip():
+        logger.info("Follow-up research returned empty content for query %d — skipping", query_index + 1)
+        return [], [], "empty_response"
+
+    try:
+        follow_up_result = await structure_evidence(
+            raw=raw_response,
+            query=query,
+            provider=llm_provider,
+            research_provider_name=current.research_provider,
+        )
+    except Exception as exc:
+        logger.warning("Gap evidence structuring failed for query %d: %s", query_index + 1, exc)
+        return [], [], str(exc)
+
+    new_claims, new_sources = _merge_follow_up(current, follow_up_result)
+    origin_label = f"gap_resolution_query_{query_index + 1}"
+    new_claims = [c.model_copy(update={"origin": origin_label}) for c in new_claims]
+    return new_claims, new_sources, None
 
 
 async def resolve_gaps(
@@ -45,20 +118,18 @@ async def resolve_gaps(
     max_sources: int = 5,
     events: EventBus | None = None,
 ) -> ResearchResult:
-    """Run iterative gap resolution on a research result.
+    """Run parallel gap resolution on a research result.
 
-    For each iteration:
-    1. Check if gaps_identified is non-empty
-    2. Generate a follow-up query from the gaps via LLM
-    3. Run research with that query
-    4. Merge new claims and sources into the result
-    5. Update gaps from the new research
+    Generates all follow-up queries in a single LLM call, then runs all
+    research + structuring concurrently, then merges all results at once.
+    max_iterations caps the number of parallel queries (previously: sequential
+    iterations).
 
     Args:
         research_result: Initial research result with gaps_identified.
         research_provider: Provider for follow-up research queries.
         llm_provider: LLM for query generation and evidence structuring.
-        max_iterations: Maximum gap resolution iterations (default 2).
+        max_iterations: Maximum number of parallel follow-up queries (default 2).
         max_sources: Max sources per follow-up query (default 5, smaller than initial).
         events: Optional event bus for progress.
 
@@ -68,95 +139,102 @@ async def resolve_gaps(
     """
     bus = events or NullBus
     current = research_result
+
+    gaps = current.gaps_identified
+    if not gaps:
+        logger.info("No gaps identified — skipping gap resolution")
+        return current
+
+    logger.info("Gap resolution: %d gap(s) identified, generating queries", len(gaps))
+
+    # Step 1: Generate all follow-up queries in a single LLM call.
+    gaps_text = "\n".join(f"- {gap}" for gap in gaps)
+    try:
+        gap_queries: GapQueries = await llm_provider.generate_structured(
+            system_prompt=GAP_QUERY_SYSTEM,
+            messages=[
+                LLMMessage(role="user", content=f"Information gaps to address:\n\n{gaps_text}")
+            ],
+            output_schema=GapQueries,
+            max_tokens=400,
+            temperature=0.1,
+        )
+        queries = gap_queries.queries[:max_iterations]
+    except Exception as exc:
+        logger.warning("Gap query generation failed: %s — skipping gap resolution", exc)
+        return current
+
+    if not queries:
+        logger.info("No actionable gaps identified — skipping gap resolution")
+        return current
+
+    logger.info(
+        "Gap resolution: running %d parallel follow-up quer%s",
+        len(queries),
+        "y" if len(queries) == 1 else "ies",
+    )
+
+    # Step 2: Emit start events and run all research + structuring concurrently.
+    for i, query in enumerate(queries):
+        await bus.emit(StageStarted(stage="gap_resolution", technique_id=f"query-{i + 1}"))
+        logger.info("Gap follow-up query %d: %s", i + 1, query)
+
+    results = await asyncio.gather(
+        *[
+            _resolve_single_gap(
+                query=q,
+                current=current,
+                research_provider=research_provider,
+                llm_provider=llm_provider,
+                max_sources=max_sources,
+                query_index=i,
+            )
+            for i, q in enumerate(queries)
+        ]
+    )
+
+    # Step 3: Merge all successful results.
     total_new_claims = 0
     total_new_sources = 0
+    all_new_claims: list[ResearchClaim] = []
+    all_new_sources: list[ResearchSource] = []
 
-    for iteration in range(max_iterations):
-        gaps = current.gaps_identified
-        if not gaps:
-            logger.info("No gaps remaining after iteration %d — stopping", iteration)
-            break
+    # Deduplicate across parallel results: track what we've accumulated.
+    seen_claim_texts: set[str] = {c.claim.strip().lower() for c in current.claims}
+    seen_source_ids: set[str] = {s.id for s in current.sources}
 
-        await bus.emit(StageStarted(stage="gap_resolution", technique_id=f"iteration-{iteration + 1}"))
-        logger.info(
-            "Gap resolution iteration %d/%d: %d gap(s) to address",
-            iteration + 1, max_iterations, len(gaps),
+    for i, (new_claims, new_sources, error) in enumerate(results):
+        if error is None:
+            await bus.emit(StageCompleted(stage="gap_resolution", technique_id=f"query-{i + 1}"))
+
+        for claim in new_claims:
+            key = claim.claim.strip().lower()
+            if key not in seen_claim_texts:
+                seen_claim_texts.add(key)
+                all_new_claims.append(claim)
+                total_new_claims += 1
+
+        for source in new_sources:
+            if source.id not in seen_source_ids:
+                seen_source_ids.add(source.id)
+                all_new_sources.append(source)
+                total_new_sources += 1
+
+    if all_new_claims or all_new_sources:
+        current = current.model_copy(
+            update={
+                "claims": list(current.claims) + all_new_claims,
+                "sources": list(current.sources) + all_new_sources,
+                # After parallel resolution, gaps are considered addressed.
+                "gaps_identified": [],
+            }
         )
-
-        # Generate follow-up query from gaps
-        gaps_text = "\n".join(f"- {gap}" for gap in gaps)
-        try:
-            query_result = await llm_provider.generate(
-                system_prompt=GAP_QUERY_SYSTEM,
-                messages=[LLMMessage(role="user", content=f"Information gaps to address:\n\n{gaps_text}")],
-                max_tokens=200,
-                temperature=0.1,
-            )
-            follow_up_query = query_result.text.strip()
-        except Exception as exc:
-            logger.warning("Gap query generation failed: %s — stopping", exc)
-            break
-
-        if follow_up_query == "NO_ACTIONABLE_GAPS":
-            logger.info("No actionable gaps identified — stopping")
-            break
-
-        logger.info("Gap follow-up query: %s", follow_up_query)
-
-        # Run follow-up research
-        try:
-            raw_response = await research_provider.research(
-                query=follow_up_query,
-                context=f"Follow-up research for gaps in: {current.query}",
-                max_sources=max_sources,
-            )
-        except Exception as exc:
-            logger.warning("Gap follow-up research failed: %s — stopping", exc)
-            break
-
-        if not raw_response.content.strip():
-            logger.info("Follow-up research returned empty content — stopping")
-            break
-
-        # Structure the follow-up evidence
-        try:
-            follow_up_result = await structure_evidence(
-                raw=raw_response,
-                query=follow_up_query,
-                provider=llm_provider,
-                research_provider_name=current.research_provider,
-            )
-        except Exception as exc:
-            logger.warning("Gap evidence structuring failed: %s — stopping", exc)
-            break
-
-        # Merge new findings into the current result
-        new_claims, new_sources = _merge_follow_up(current, follow_up_result)
-        total_new_claims += len(new_claims)
-        total_new_sources += len(new_sources)
-
-        # Update the result with merged data and new gaps
-        current = current.model_copy(update={
-            "claims": list(current.claims) + new_claims,
-            "sources": list(current.sources) + new_sources,
-            "gaps_identified": follow_up_result.gaps_identified,  # Replace with remaining gaps
-        })
-
-        await bus.emit(StageCompleted(
-            stage="gap_resolution",
-            technique_id=f"iteration-{iteration + 1}",
-        ))
-
         logger.info(
-            "Iteration %d: +%d claims, +%d sources, %d gaps remaining",
-            iteration + 1, len(new_claims), len(new_sources),
-            len(current.gaps_identified),
-        )
-
-    if total_new_claims > 0 or total_new_sources > 0:
-        logger.info(
-            "Gap resolution complete: +%d claims, +%d sources total",
-            total_new_claims, total_new_sources,
+            "Gap resolution complete: +%d claims, +%d sources from %d parallel quer%s",
+            total_new_claims,
+            total_new_sources,
+            len(queries),
+            "y" if len(queries) == 1 else "ies",
         )
 
     return current
@@ -183,12 +261,8 @@ def _merge_follow_up(
     existing_source_ids = {s.id for s in existing.sources}
 
     new_claims = [
-        c for c in follow_up.claims
-        if c.claim.strip().lower() not in existing_claim_texts
+        c for c in follow_up.claims if c.claim.strip().lower() not in existing_claim_texts
     ]
-    new_sources = [
-        s for s in follow_up.sources
-        if s.id not in existing_source_ids
-    ]
+    new_sources = [s for s in follow_up.sources if s.id not in existing_source_ids]
 
     return new_claims, new_sources

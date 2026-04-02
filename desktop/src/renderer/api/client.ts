@@ -38,7 +38,10 @@ import type {
   PoolRequest,
   PoolResponse,
   UpdateEvidenceItemRequest,
+  CreateEvidenceItemRequest,
   ModelsResponse,
+  TemplateInfo,
+  TemplateUploadResponse,
 } from './types'
 
 export class SatClient {
@@ -239,6 +242,77 @@ export class SatClient {
         method: 'PATCH',
         body: JSON.stringify(updates),
       },
+    )
+  }
+
+  async createEvidenceItem(
+    sessionId: string,
+    data: CreateEvidenceItemRequest,
+  ): Promise<EvidenceItem> {
+    return this.request<EvidenceItem>(
+      `/api/evidence/${sessionId}/items`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+    )
+  }
+
+  /**
+   * Import a complete EvidencePool verbatim into a new evidence session.
+   *
+   * Used by the re-analyze flow to carry evidence from a prior run forward.
+   * Returns a fresh session_id — no LLM calls or ingestion are performed.
+   * The pool is accepted verbatim; the prior session_id is replaced.
+   *
+   * @decision DEC-DESKTOP-REANALYZE-001
+   * @title importEvidencePool: thin wrapper around POST /api/evidence/pool/import
+   * @status accepted
+   * @rationale The re-analyze flow needs to carry prior evidence into a new session
+   *   synchronously. importEvidencePool maps directly to the backend import endpoint,
+   *   which creates a fresh session with the prior pool's items preserved verbatim.
+   *   Kept as a dedicated method (rather than reusing createEvidencePool) so call sites
+   *   are semantically distinct — callers of importEvidencePool have a full EvidencePool,
+   *   callers of createEvidencePool have raw text/sources that need parsing.
+   */
+  async importEvidencePool(pool: EvidencePool): Promise<PoolResponse> {
+    return this.request<PoolResponse>('/api/evidence/pool/import', {
+      method: 'POST',
+      body: JSON.stringify(pool),
+    })
+  }
+
+  /** List all report templates (custom + default). */
+  async getTemplates(): Promise<TemplateInfo[]> {
+    return this.request<TemplateInfo[]>('/api/config/templates')
+  }
+
+  /**
+   * Upload a custom Jinja2 report template.
+   *
+   * Sends the file as multipart/form-data. The backend validates Jinja2
+   * syntax and stores the file in ~/.sat/templates/ at 0o600 permissions.
+   */
+  async uploadTemplate(file: File): Promise<TemplateUploadResponse> {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch(`${this.baseUrl}/api/config/templates/upload`, {
+      method: 'POST',
+      headers: this.authHeaders(),
+      body: form,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`API error ${res.status}: ${text}`)
+    }
+    return res.json()
+  }
+
+  /** Delete a custom report template by filename. Returns 404 if not found. */
+  async deleteTemplate(filename: string): Promise<void> {
+    return this.request<void>(
+      `/api/config/templates/${encodeURIComponent(filename)}`,
+      { method: 'DELETE' },
     )
   }
 }

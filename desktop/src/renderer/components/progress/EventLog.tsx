@@ -55,6 +55,14 @@ function formatEvent(event: PipelineEventMessage): { text: string; colorClass: s
         text: `  ✗ ${d.name}: failed — ${d.error || 'unknown error'}`,
         colorClass: 'event-red',
       }
+    case 'ProviderPolling': {
+      const pct = (d.max_attempts as number) > 0 ? Math.round(((d.attempt as number) / (d.max_attempts as number)) * 100) : 0
+      const statusStr = d.status ? ` [${d.status}]` : ''
+      return {
+        text: `  ↻ ${d.name}: polling ${d.attempt}/${d.max_attempts} (${pct}%)${statusStr}`,
+        colorClass: 'event-muted',
+      }
+    }
     case 'ResearchCompleted':
       return {
         text: `✓ Research phase complete`,

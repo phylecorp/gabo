@@ -52,9 +52,10 @@ class TestTryResolveApiKey:
 
     def test_returns_key_from_anthropic_env(self):
         """Resolve ANTHROPIC_API_KEY from environment."""
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-key"}):
-            config = ProviderConfig(provider="anthropic")
-            assert config.try_resolve_api_key() == "env-key"
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-key"}):
+                config = ProviderConfig(provider="anthropic")
+                assert config.try_resolve_api_key() == "env-key"
 
     def test_returns_key_from_openai_env(self):
         """Resolve OPENAI_API_KEY from environment."""
@@ -65,9 +66,10 @@ class TestTryResolveApiKey:
 
     def test_returns_key_from_gemini_env(self):
         """Resolve GEMINI_API_KEY from environment."""
-        with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-key"}):
-            config = ProviderConfig(provider="gemini", model="gemini-2.5-pro")
-            assert config.try_resolve_api_key() == "gemini-key"
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-key"}):
+                config = ProviderConfig(provider="gemini", model="gemini-2.5-pro")
+                assert config.try_resolve_api_key() == "gemini-key"
 
     def test_returns_none_when_no_key_found(self):
         """Return None instead of raising when no key is available."""
@@ -96,16 +98,18 @@ class TestResolveApiKeyBackwardCompat:
 
     def test_resolve_raises_when_no_key(self):
         """resolve_api_key() should raise ValueError when no key is found."""
-        with patch.dict("os.environ", {}, clear=True):
-            config = ProviderConfig(provider="anthropic")
-            with pytest.raises(ValueError, match="No API key found"):
-                config.resolve_api_key()
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict("os.environ", {}, clear=True):
+                config = ProviderConfig(provider="anthropic")
+                with pytest.raises(ValueError, match="No API key found"):
+                    config.resolve_api_key()
 
     def test_resolve_returns_key_when_present(self):
         """resolve_api_key() returns key when available (unchanged behavior)."""
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
-            config = ProviderConfig(provider="anthropic")
-            assert config.resolve_api_key() == "test-key"
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+                config = ProviderConfig(provider="anthropic")
+                assert config.resolve_api_key() == "test-key"
 
     def test_resolve_returns_config_key(self):
         """resolve_api_key() returns explicit config key (unchanged behavior)."""

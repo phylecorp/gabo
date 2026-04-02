@@ -34,6 +34,10 @@ class EvidenceItem(BaseModel):
     provider_name: str | None = Field(
         default=None, description="Research provider name if from research"
     )
+    source_urls: list[str] = Field(
+        default_factory=list,
+        description="URLs of sources backing this evidence item, for syndication detection",
+    )
 
 
 class EvidencePool(BaseModel):

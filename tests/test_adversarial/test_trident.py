@@ -677,6 +677,7 @@ class TestResolveInvestigatorProvider:
         # All three taken (only three providers known)
         # None will have API keys either
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setattr("sat.config._load_config_file_key", lambda provider: None)
 
         result = resolve_investigator_provider("anthropic", "openai")
         assert result is None
@@ -687,6 +688,7 @@ class TestResolveInvestigatorProvider:
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr("sat.config._load_config_file_key", lambda provider: None)
 
         result = resolve_investigator_provider("anthropic", "openai")
         assert result is None

@@ -28,6 +28,11 @@ class DevilsAdvocacy(Technique):
     def output_schema(self) -> type[ArtifactResult]:
         return DevilsAdvocacyResult
 
+    @property
+    def temperature(self) -> float | None:
+        """Higher temperature enables imaginative counter-argument construction for devil's advocacy."""
+        return 0.9
+
     def build_prompt(self, ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         return build_prompt(ctx)
 

@@ -34,7 +34,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from sat.config import AnalysisConfig
-from sat.events import EventBus, PipelineEvent
+from sat.events import EventBus, PipelineEvent, StageCompleted
 
 
 class ActiveRun:
@@ -62,6 +62,10 @@ class ActiveRun:
         self.status: str = "running"  # running, queued, completed, failed, cancelled
         self.error: str | None = None
         self.output_dir: str | None = None
+        # Accumulates technique IDs as StageCompleted(stage="analysis") events arrive.
+        # Read by GET /api/runs/{run_id} to return real progress for in-flight runs
+        # rather than the hardcoded [] that was previously returned (issue #14).
+        self.techniques_completed: list[str] = []
 
         # Subscribe our handler to bridge events to WS clients
         self.bus.subscribe(self._handle_event)
@@ -74,6 +78,11 @@ class ActiveRun:
             "timestamp": datetime.now(UTC).isoformat(),
         }
         self.events_log.append(event_dict)
+
+        # Track analysis technique completions for live dashboard progress (issue #14).
+        # Ignore empty technique_id — that signals a pipeline-level stage, not a technique.
+        if isinstance(event, StageCompleted) and event.stage == "analysis" and event.technique_id:
+            self.techniques_completed.append(event.technique_id)
 
         # Broadcast to all connected WS clients; prune disconnected ones
         disconnected: list[WebSocket] = []

@@ -73,6 +73,7 @@ from fastapi.responses import HTMLResponse, Response
 from sat.api.auth import verify_token
 from sat.api.models import ConcurrencyStatusResponse, RenameRunRequest, RunDetail, RunSummary
 from sat.api.run_manager import RunManager
+from sat.config import get_default_runs_dir
 from sat.models.base import ArtifactManifest
 from sat.report import generate_report
 
@@ -260,10 +261,10 @@ def create_runs_router(manager: RunManager) -> APIRouter:
 
     @router.get("/api/runs", response_model=list[RunSummary])
     async def list_runs(
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
     ) -> list[RunSummary]:
         """List all analysis runs — active (in-process) and completed (filesystem)."""
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         # Scan filesystem for manifests
         fs_manifests = _scan_manifests(search_dir)
@@ -295,7 +296,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
                     started_at="",
                     completed_at=None,
                     techniques_selected=active_run.config.techniques or [],
-                    techniques_completed=[],
+                    techniques_completed=active_run.techniques_completed,
                     evidence_provided=active_run.config.evidence is not None,
                     adversarial_enabled=bool(
                         active_run.config.adversarial and active_run.config.adversarial.enabled
@@ -315,10 +316,10 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     @router.get("/api/runs/{run_id}", response_model=RunDetail)
     async def get_run(
         run_id: str,
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
     ) -> RunDetail:
         """Get full detail for a single run by ID."""
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         # Check active runs first
         active_run = manager.get_run(run_id)
@@ -373,11 +374,11 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     @router.get("/api/runs/{run_id}/report")
     async def get_run_report(
         run_id: str,
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
         fmt: str = Query(default="html", description="Report format: 'html' or 'markdown'"),
     ) -> HTMLResponse:
         """Return the executive report for a run (HTML by default)."""
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         output_dir = _find_output_dir(manager, run_id, search_dir)
         if not output_dir:
@@ -412,7 +413,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     @router.post("/api/runs/{run_id}/report/generate")
     async def generate_run_report(
         run_id: str,
-        dir: str = Query(default="."),
+        dir: str | None = Query(default=None),
         fmt: str = Query(default="both"),
     ) -> dict:
         """Generate an executive report from existing run artifacts.
@@ -422,7 +423,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         Returns 404 if the run is not found, 400 if report generation fails
         (e.g. manifest.json is missing or malformed).
         """
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         output_dir = _find_output_dir(manager, run_id, search_dir)
         if not output_dir:
@@ -442,7 +443,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     async def get_run_artifact(
         run_id: str,
         path: str = Query(..., description="Path to the JSON artifact file"),
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
     ) -> Response:
         """Return a JSON artifact file for a run.
 
@@ -450,7 +451,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         Path traversal (e.g. ../../etc/passwd) is rejected with 400.
         Returns 404 if the run or the artifact file is not found.
         """
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         output_dir = _find_output_dir(manager, run_id, search_dir)
         if not output_dir:
@@ -481,7 +482,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     @router.get("/api/runs/{run_id}/evidence")
     async def get_run_evidence(
         run_id: str,
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
     ) -> Response:
         """Return the persisted EvidencePool JSON for a run.
 
@@ -489,7 +490,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         EvidencePool JSON on success. Returns 404 if the run is not found or if
         evidence.json does not exist (legacy runs or runs without curated evidence).
         """
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         output_dir = _find_output_dir(manager, run_id, search_dir)
         if not output_dir:
@@ -511,7 +512,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     async def download_artifact(
         run_id: str,
         path: str = Query(..., description="Path to the artifact file"),
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
     ) -> Response:
         """Download an artifact file with Content-Disposition: attachment.
 
@@ -520,7 +521,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         Returns 404 if the run or the artifact file is not found.
         Media type is inferred from the file extension.
         """
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         output_dir = _find_output_dir(manager, run_id, search_dir)
         if not output_dir:
@@ -559,7 +560,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     @router.get("/api/runs/{run_id}/export")
     async def export_run(
         run_id: str,
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
     ) -> Response:
         """Download the entire run output directory as a ZIP archive.
 
@@ -567,7 +568,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         run's output directory. The ZIP preserves the directory structure with
         the run folder name as the top-level entry.
         """
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         output_dir = _find_output_dir(manager, run_id, search_dir)
         if not output_dir:
@@ -593,7 +594,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     async def rename_run(
         run_id: str,
         body: RenameRunRequest,
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
     ) -> RunSummary:
         """Rename a run by updating the name field in manifest.json.
 
@@ -601,7 +602,7 @@ def create_runs_router(manager: RunManager) -> APIRouter:
         manifest.json and the in-process ActiveRun if present. Returns
         the updated RunSummary.
         """
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
         new_name = body.name.strip()
 
         # Update in-process run if present
@@ -647,14 +648,14 @@ def create_runs_router(manager: RunManager) -> APIRouter:
     @router.delete("/api/runs/{run_id}", status_code=204)
     async def delete_run(
         run_id: str,
-        dir: str = Query(default=".", description="Directory to scan for sat-* output folders"),
+        dir: str | None = Query(default=None, description="Directory to scan for sat-* output folders (defaults to ~/.sat/runs/)"),
     ) -> Response:
         """Delete a run and its output directory.
 
         Refuses to delete a run that is actively running (409 Conflict).
         Returns 204 No Content on success, 404 if the run is not found.
         """
-        search_dir = Path(dir)
+        search_dir = Path(dir) if dir is not None else get_default_runs_dir()
 
         # Refuse to delete an actively running run
         active_run = manager.get_run(run_id)

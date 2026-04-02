@@ -13,6 +13,7 @@
  *   Using NavLink with isActive gives it the same active highlight as other items.
  */
 import { NavLink } from 'react-router'
+import { useConcurrencyStatus } from '../../hooks/useRuns'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: '◉' },
@@ -20,6 +21,9 @@ const navItems = [
 ]
 
 export default function Sidebar() {
+  const { data: concurrency } = useConcurrencyStatus()
+  const activeCount = concurrency ? concurrency.running + concurrency.queued : 0
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header drag-region">
@@ -57,18 +61,39 @@ export default function Sidebar() {
       </nav>
       <div className="sidebar-footer">
         <NavLink
+          to="/about"
+          className={({ isActive }) =>
+            `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`
+          }
+        >
+          <span className="sidebar-icon">ⓘ</span>
+          About SAT
+        </NavLink>
+        <NavLink
           to="/settings"
           className={({ isActive }) =>
             `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`
           }
-          style={{ marginBottom: '8px' }}
         >
-          <span className="sidebar-icon">⚙</span>
+          <span className="sidebar-icon sidebar-icon-lg">⚙</span>
           Settings
         </NavLink>
         <div className="sidebar-status">
-          <span className="status-dot status-dot-ok" />
-          <span className="text-secondary text-xs">System Ready</span>
+          {activeCount > 0 ? (
+            <>
+              <span className="status-dot status-dot-warn" />
+              <span className="text-secondary text-xs">
+                {concurrency?.running ? `${concurrency.running} running` : ''}
+                {concurrency?.running && concurrency?.queued ? ' · ' : ''}
+                {concurrency?.queued ? `${concurrency.queued} queued` : ''}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="status-dot status-dot-ok" />
+              <span className="text-secondary text-xs">System Ready</span>
+            </>
+          )}
         </div>
       </div>
     </aside>

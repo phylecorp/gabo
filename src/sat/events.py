@@ -119,6 +119,27 @@ class EvidenceGatheringCompleted(PipelineEvent):
     gap_count: int = 0
 
 
+@dataclass
+class ProviderPolling(PipelineEvent):
+    """Emitted during research provider polling to signal liveness.
+
+    @decision DEC-RESEARCH-015
+    @title ProviderPolling events for liveness feedback during long polling
+    @status accepted
+    @rationale Deep research providers (OpenAI, Gemini) can poll for 20+ minutes.
+    The frontend was frozen showing only a timer. ProviderPolling events emitted
+    every Nth poll attempt give the frontend real-time liveness signals without
+    flooding the event log. Perplexity (single blocking call) emits one event
+    before the API call starts so the frontend knows it's alive. The event carries
+    attempt/max_attempts for percentage calculation and status for server-side state.
+    """
+
+    name: str         # provider name (e.g., "openai_deep", "gemini_deep", "perplexity")
+    attempt: int      # current poll attempt (1-based)
+    max_attempts: int # total max poll attempts
+    status: str = "" # server-side status if available (e.g., "in_progress")
+
+
 # --- EventBus ---
 
 EventHandler = Callable[[PipelineEvent], Awaitable[None]]

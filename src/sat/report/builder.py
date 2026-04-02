@@ -46,6 +46,7 @@ from jinja2 import Environment, FileSystemLoader
 from sat.models.base import ArtifactManifest, ArtifactResult
 from sat.report.descriptions import CATEGORY_DESCRIPTIONS, TECHNIQUE_DESCRIPTIONS
 from sat.report.renderers import render_technique
+from sat.utils.resources import get_resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -322,9 +323,17 @@ class ReportBuilder:
             List of paths to generated files.
         """
         context = self._build_context()
-        template_dir = Path(__file__).parent / "templates"
+        # @decision DEC-TEMPLATE-003
+        # Custom dir searched first so user templates shadow bundled defaults.
+        # Checked at each write() call — no restart required after upload.
+        default_dir = get_resource_path(__file__, "templates")
+        custom_dir = Path.home() / ".sat" / "templates"
+        search_path: list[str] = []
+        if custom_dir.exists() and custom_dir.is_dir():
+            search_path.append(str(custom_dir))
+        search_path.append(str(default_dir))
         env = Environment(
-            loader=FileSystemLoader(str(template_dir)),
+            loader=FileSystemLoader(search_path),
             trim_blocks=True,
             lstrip_blocks=True,
             keep_trailing_newline=True,
@@ -486,7 +495,7 @@ class ReportBuilder:
         )
 
         # Read the CSS block from the existing HTML template (lines between <style> and </style>)
-        template_path = Path(__file__).parent / "templates" / "report.html.j2"
+        template_path = get_resource_path(__file__, "templates/report.html.j2")
         css_block = self._extract_css_from_template(template_path)
 
         question_escaped = self.manifest.question.replace("<", "&lt;").replace(">", "&gt;")

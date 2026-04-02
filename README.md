@@ -114,6 +114,32 @@ The dashboard shows your recent analyses with status indicators, timestamps, and
 - Node.js 18+ (for the desktop app)
 - At least one LLM provider API key (Anthropic recommended)
 
+ **Option A — From source (development)**
+
+  ```bash
+  cd desktop
+  npm install
+  bash dev.sh
+  ```
+
+  dev.sh creates a Python venv, installs dependencies, starts the API server,
+  and launches Electron with hot reload. Requires Python 3.11+ and Node 18+.
+
+**Option B — Build a distributable installer
+
+  # 1. Build the Python sidecar (must run on the target platform)
+  python3 scripts/build-sidecar.py
+
+  # 2. Build the installer
+  cd desktop
+  npm install
+  npm run dist:mac    # → dist/Gabo-x.x.x.dmg
+  # or
+  npm run dist:win    # → dist/Gabo-Setup-x.x.x.exe
+
+  The sidecar is a PyInstaller bundle of the FastAPI backend — the Electron app
+  launches it as a subprocess, so end users don't need Python installed.
+  
 ### Install the Python backend
 
 ```bash
@@ -159,7 +185,6 @@ Recent releases shipped Trident adversarial mode (three-model debate), LLM-gener
 
 - Packaged desktop installers (macOS, Windows, Linux)
 - Dynamic model selection across all pipeline stages
-- Iterative Brave research with follow-up queries
 
 ---
 

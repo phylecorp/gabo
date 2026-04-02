@@ -52,6 +52,7 @@ from sat.api.models import (
     EvidenceGatherResponse,
     PoolRequest,
     PoolResponse,
+    CreateEvidenceItemRequest,
     UpdateEvidenceItemRequest,
 )
 from sat.api.run_manager import ActiveRun, RunManager
@@ -410,6 +411,29 @@ def create_evidence_router(
 
         return PoolResponse(session_id=session.session_id, pool=pool)
 
+    @router.post("/api/evidence/pool/import", response_model=PoolResponse)
+    async def import_pool(request: EvidencePool) -> PoolResponse:
+        """Import a complete EvidencePool verbatim into a new evidence session.
+
+        @decision DEC-API-017
+        @title POST /api/evidence/pool/import: verbatim pool import for re-analyze flow
+        @status accepted
+        @rationale When a user wants to re-run an analysis using evidence from a prior run,
+        the prior EvidencePool must be loaded into a new session without any LLM calls or
+        re-gathering. This endpoint accepts the full EvidencePool (from GET /api/runs/{id}/evidence)
+        and creates a fresh session with a new session_id. The pool is accepted verbatim —
+        all items, sources, gaps, and metadata are preserved exactly. The session is immediately
+        status='ready' so the caller can invoke POST /api/evidence/{session_id}/analyze without
+        waiting. The prior session_id is replaced to prevent ID collisions and confusion.
+        No LLM calls, no document ingestion, no background tasks — O(1) synchronous operation.
+        """
+        session = evidence_manager.create_session()
+        # Replace prior session_id with fresh one; all other pool data is preserved verbatim
+        imported_pool = request.model_copy(update={"session_id": session.session_id})
+        session.pool = imported_pool
+        session.status = "ready"
+        return PoolResponse(session_id=session.session_id, pool=imported_pool)
+
     @router.patch("/api/evidence/{session_id}/items/{item_id}")
     async def update_evidence_item(
         session_id: str,
@@ -459,5 +483,51 @@ def create_evidence_router(
 
         session.pool = session.pool.model_copy(update={"items": updated_items})
         return updated_item
+
+    @router.post("/api/evidence/{session_id}/items", response_model=EvidenceItem)
+    async def create_evidence_item(
+        session_id: str,
+        request: CreateEvidenceItemRequest,
+    ) -> EvidenceItem:
+        """Add a user-created evidence item to the session pool during curation.
+
+        @decision DEC-API-016
+        @title POST endpoint for manual evidence item creation during curation
+        @status accepted
+        @rationale Users need to inject their own evidence during the Gather & Review
+        stage, alongside items surfaced by research or document ingestion. Items are
+        assigned sequential M-N identifiers (M-1, M-2, ...) and source='manual' to
+        distinguish them from gathered evidence (D-*, R-*, U-*, DOC-*). The item is
+        selected=True by default so it participates in analysis immediately. Session
+        must exist and be in 'ready' state — same guard as the PATCH endpoint.
+        The pool is updated immutably (model_copy) consistent with DEC-API-015.
+        """
+        session = evidence_manager.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Evidence session not found")
+        if session.pool is None or session.status != "ready":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Evidence session not ready (status: {session.status})",
+            )
+
+        # Assign sequential M-N ID based on existing manual items
+        existing_manual = [i for i in session.pool.items if i.item_id.startswith("M-")]
+        next_n = len(existing_manual) + 1
+        item_id = f"M-{next_n}"
+
+        item = EvidenceItem(
+            item_id=item_id,
+            claim=request.claim,
+            source="manual",
+            source_ids=[],
+            confidence=request.confidence,
+            category=request.category,
+            entities=[],
+            selected=True,
+            verified=False,
+        )
+        session.pool = session.pool.model_copy(update={"items": [*session.pool.items, item]})
+        return item
 
     return router

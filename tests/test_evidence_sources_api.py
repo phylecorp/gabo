@@ -159,14 +159,16 @@ def test_route_config_construction_maps_evidence_sources():
 def test_route_config_construction_no_sources_gives_none():
     """Route construction with no evidence_sources yields None in AnalysisConfig."""
     from pathlib import Path
-    from sat.config import ProviderConfig, ResearchConfig, ReportConfig
+    from sat.config import ProviderConfig, ResearchConfig, ReportConfig, get_default_runs_dir
 
     request = AnalysisRequest(question="Test?")
+    # Mirror the actual route: output_dir=None means use the stable default runs directory
+    effective_output_dir = Path(request.output_dir) if request.output_dir is not None else get_default_runs_dir()
     config = AnalysisConfig(
         question=request.question,
         evidence=request.evidence,
         techniques=request.techniques,
-        output_dir=Path(request.output_dir),
+        output_dir=effective_output_dir,
         provider=ProviderConfig(provider=request.provider, model=request.model),
         research=ResearchConfig(enabled=request.research_enabled, mode=request.research_mode),
         adversarial=None,

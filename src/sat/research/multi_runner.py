@@ -75,6 +75,7 @@ _RESEARCH_EXTRA_TRANSIENT: frozenset[str] = frozenset(
 
 def discover_providers(
     llm_provider: LLMProvider | None = None,
+    events: EventBus | None = None,
 ) -> list[tuple[str, ResearchProvider]]:
     """Discover available research providers by attempting construction.
 
@@ -93,6 +94,12 @@ def discover_providers(
     so the Settings UI model preference takes effect without relying on the
     provider's internal resolution (DEC-MODELS-003). Passing None is safe when
     no config-file model is set — the constructor falls back to env var then default.
+
+    Args:
+        llm_provider: Optional LLM provider for the fallback LLM research path.
+        events: Optional EventBus for liveness events (DEC-RESEARCH-015). Passed
+            to providers that support it (OpenAI, Gemini, Perplexity). NullBus
+            default inside each provider when not provided.
     """
     providers: list[tuple[str, ResearchProvider]] = []
 
@@ -106,6 +113,7 @@ def discover_providers(
                 OpenAIDeepResearchProvider(
                     api_key=_load_config_file_key("openai"),
                     model=_load_config_file_research_model("openai"),
+                    events=events,
                 ),
             )
         )
@@ -122,6 +130,7 @@ def discover_providers(
                 PerplexityProvider(
                     api_key=_load_config_file_key("perplexity"),
                     model=_load_config_file_research_model("perplexity"),
+                    events=events,
                 ),
             )
         )
@@ -138,6 +147,7 @@ def discover_providers(
                 GeminiDeepResearchProvider(
                     api_key=_load_config_file_key("gemini"),
                     model=_load_config_file_research_model("gemini"),
+                    events=events,
                 ),
             )
         )
@@ -145,7 +155,7 @@ def discover_providers(
     except (ValueError, ImportError):
         logger.debug("Gemini deep research: unavailable (no API key)")
 
-    # Always include Brave search alongside deep providers
+    # Always include Brave search alongside deep providers (no polling, no events needed)
     try:
         from sat.research.brave import BraveProvider
 
@@ -154,7 +164,7 @@ def discover_providers(
     except (ValueError, ImportError):
         logger.debug("Brave search: unavailable (no API key)")
 
-    # LLM fallback only if nothing else is available
+    # LLM fallback only if nothing else is available (no polling, no events needed)
     if not providers and llm_provider:
         from sat.research.llm_search import LLMResearchProvider
 
@@ -203,7 +213,7 @@ async def run_multi_research(
     """
     bus = events or NullBus
 
-    providers = discover_providers(llm_provider)
+    providers = discover_providers(llm_provider, events=bus)
     if not providers:
         raise ValueError("No research providers available. Configure at least one API key.")
 
@@ -315,3 +325,70 @@ async def run_multi_research(
         )
     )
     return result
+
+
+class MultiResearchAdapter:
+    """Wraps multi-provider research into the ResearchProvider protocol interface.
+
+    @decision DEC-RESEARCH-014
+    @title MultiResearchAdapter bridges gap resolver to multi-provider research
+    @status accepted
+    @rationale Gap resolution previously used a single-provider path regardless of the
+    pipeline's research mode. This meant that gap follow-up queries received narrower,
+    single-source evidence while the initial research benefited from cross-validated
+    multi-provider results. MultiResearchAdapter implements the ResearchProvider protocol
+    so gap_resolver.resolve_gaps() can accept it without modification. When mode=="multi",
+    pipeline.py passes a MultiResearchAdapter instead of a single provider, giving gap
+    resolution the same cross-validated evidence quality as the initial research phase.
+    The adapter runs discover_providers() + parallel gather + merge_responses() — the
+    same core path as run_multi_research() — but returns a raw ResearchResponse rather
+    than a structured ResearchResult, because gap_resolver calls structure_evidence()
+    internally after receiving the raw response.
+    """
+
+    def __init__(self, llm_provider: LLMProvider) -> None:
+        self._llm = llm_provider
+
+    async def research(
+        self,
+        query: str,
+        context: str | None = None,
+        max_sources: int = 10,
+    ) -> ResearchResponse:
+        """Run all available providers in parallel and return merged raw response.
+
+        Discovers providers each call so dynamic API key changes take effect.
+        Falls back gracefully: if all providers fail, raises RuntimeError.
+        """
+        providers = discover_providers(self._llm)
+        if not providers:
+            raise ValueError("No research providers available for gap resolution.")
+
+        provider_names = [name for name, _ in providers]
+        logger.info(
+            "MultiResearchAdapter: gap follow-up with providers: %s",
+            ", ".join(provider_names),
+        )
+
+        tasks = [
+            prov.research(query=query, context=context, max_sources=max_sources)
+            for _, prov in providers
+        ]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        successes: list[tuple[str, ResearchResponse]] = []
+        for (name, _), result in zip(providers, raw_results):
+            if isinstance(result, Exception):
+                logger.warning("MultiResearchAdapter: provider %s failed: %s", name, result)
+            else:
+                successes.append((name, result))
+                logger.info(
+                    "MultiResearchAdapter: provider %s returned %d citations",
+                    name,
+                    len(result.citations),
+                )
+
+        if not successes:
+            raise RuntimeError("All research providers failed during gap resolution follow-up")
+
+        return merge_responses(successes)

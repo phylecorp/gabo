@@ -263,7 +263,8 @@ export interface TestProviderResponse {
 export interface EvidenceItem {
   item_id: string
   claim: string
-  source: 'decomposition' | 'research' | 'user' | 'document'
+  /** source='manual' is used for items added by the user during the review stage (M-N IDs). */
+  source: 'decomposition' | 'research' | 'user' | 'document' | 'manual'
   source_ids: string[]
   category: string
   confidence: 'High' | 'Medium' | 'Low'
@@ -332,11 +333,17 @@ export interface UpdateEvidenceItemRequest {
   category?: string
 }
 
+export interface CreateEvidenceItemRequest {
+  claim: string
+  confidence?: string
+  category?: string
+}
+
 // Evidence gathering progress state
 export interface EvidenceGatheringProgress {
   status: 'idle' | 'gathering' | 'ready' | 'failed'
   events: PipelineEventMessage[]
-  researchProviders: Record<string, 'pending' | 'running' | 'completed' | 'failed'>
+  researchProviders: Record<string, 'pending' | 'running' | 'polling' | 'completed' | 'failed'>
   error: string | null
 }
 
@@ -346,6 +353,7 @@ export type PipelineEventType =
   | 'ProviderStarted'
   | 'ProviderCompleted'
   | 'ProviderFailed'
+  | 'ProviderPolling'
   | 'ResearchCompleted'
   | 'StageStarted'
   | 'StageCompleted'
@@ -370,7 +378,22 @@ export interface RunProgress {
   currentStage: string | null
   currentTechnique: string | null
   completedStages: string[]
-  researchProviders: Record<string, 'pending' | 'running' | 'completed' | 'failed'>
+  researchProviders: Record<string, 'pending' | 'running' | 'polling' | 'completed' | 'failed'>
+  researchPollStatus?: Record<string, { attempt: number; maxAttempts: number; status: string }>
   error: string | null
   outputDir: string | null
+}
+
+// Report Templates — mirrors Python TemplateInfo / TemplateUploadResponse
+export interface TemplateInfo {
+  filename: string
+  size: number
+  modified: string
+  is_custom: boolean
+}
+
+export interface TemplateUploadResponse {
+  filename: string
+  size: number
+  status: string
 }

@@ -27,6 +27,7 @@ import re
 import httpx
 
 from sat.config import resolve_research_model
+from sat.events import EventBus, NullBus, ProviderPolling
 from sat.research.base import ResearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,10 @@ logger = logging.getLogger(__name__)
 # Constants
 POLL_INTERVAL = 15  # seconds
 MAX_POLL_ATTEMPTS = 80  # 20 minutes max
+
+# Throttle: emit ProviderPolling every Nth attempt to avoid log flooding.
+# At 15s poll interval, every 4th attempt = ~every 60s (once per minute).
+_POLL_EMIT_EVERY_N = 4
 
 
 class GeminiDeepResearchProvider:
@@ -43,6 +48,7 @@ class GeminiDeepResearchProvider:
         self,
         api_key: str | None = None,
         model: str | None = None,
+        events: EventBus | None = None,
     ) -> None:
         key = api_key or os.environ.get("GEMINI_API_KEY")
         if not key:
@@ -51,6 +57,8 @@ class GeminiDeepResearchProvider:
         self._base_url = "https://generativelanguage.googleapis.com/v1beta"
         # Resolution: explicit param > config file > GEMINI_RESEARCH_MODEL env var > default
         self._agent = model or resolve_research_model("gemini")
+        # EventBus for liveness events (DEC-RESEARCH-015). NullBus when not provided.
+        self._events: EventBus = events if events is not None else NullBus
 
     async def research(
         self,
@@ -99,7 +107,12 @@ class GeminiDeepResearchProvider:
             return data.get("name") or data.get("id") or data.get("interactionId", "")
 
     async def _poll_until_complete(self, interaction_id: str) -> dict:
-        """Poll the interaction endpoint until research is complete."""
+        """Poll the interaction endpoint until research is complete.
+
+        Emits ProviderPolling on the first attempt and every _POLL_EMIT_EVERY_N
+        attempts thereafter (DEC-RESEARCH-015). At 15s intervals, events arrive
+        roughly once per minute, keeping the frontend alive without flooding the log.
+        """
         async with httpx.AsyncClient() as client:
             for attempt in range(MAX_POLL_ATTEMPTS):
                 response = await client.get(
@@ -114,6 +127,15 @@ class GeminiDeepResearchProvider:
                 status = data.get("status") or data.get("metadata", {}).get("status", "")
                 status_lower = status.lower()
                 logger.debug(f"Poll attempt {attempt + 1}/{MAX_POLL_ATTEMPTS}: status={status}")
+
+                # Emit liveness event on first attempt and every Nth thereafter.
+                if attempt % _POLL_EMIT_EVERY_N == 0:
+                    await self._events.emit(ProviderPolling(
+                        name="gemini_deep",
+                        attempt=attempt + 1,
+                        max_attempts=MAX_POLL_ATTEMPTS,
+                        status=status_lower,
+                    ))
 
                 if status_lower == "completed":
                     return data

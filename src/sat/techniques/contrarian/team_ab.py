@@ -28,6 +28,11 @@ class TeamAB(Technique):
     def output_schema(self) -> type[ArtifactResult]:
         return TeamABResult
 
+    @property
+    def temperature(self) -> float | None:
+        """Higher temperature enables distinct competing cases for Team A/Team B analysis."""
+        return 0.9
+
     def build_prompt(self, ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         return build_prompt(ctx)
 

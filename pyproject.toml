@@ -49,7 +49,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = [
-    "integration: tests that call real LLM APIs (deselected by default, run with -m integration)",
+    "integration: tests that require external resources (live LLM APIs, built binaries) — deselected by default, run with -m integration",
 ]
 addopts = "-m 'not integration'"
 

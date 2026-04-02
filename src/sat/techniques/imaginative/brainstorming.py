@@ -28,6 +28,11 @@ class Brainstorming(Technique):
     def output_schema(self) -> type[ArtifactResult]:
         return BrainstormingResult
 
+    @property
+    def temperature(self) -> float | None:
+        """Higher temperature enables divergent ideation for creative brainstorming."""
+        return 0.9
+
     def build_prompt(self, ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         return build_prompt(ctx)
 

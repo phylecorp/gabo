@@ -1,3 +1,25 @@
+# electron-builder configuration for Gabo desktop application.
+#
+# Builds:
+#   - macOS: DMG installer (arm64)
+#   - Windows: NSIS installer (x64)
+#
+# @decision DEC-BUILD-004
+# @title Separate dist:mac and dist:win scripts, no cross-compilation
+# @status accepted
+# @rationale PyInstaller cannot cross-compile; each platform must build natively.
+# Separate npm scripts (dist:mac, dist:win) make the intent explicit and allow
+# a CI matrix to call the correct script per runner OS. The underlying PyInstaller
+# command is identical (auto-detects OS), but the scripts are named for clarity.
+#
+# @decision DEC-BUILD-002
+# @title onedir mode — extraResources must use directory glob
+# @status accepted
+# @rationale onedir mode produces a directory of files (not a single binary).
+# electron-builder's extraResources must use a filter glob "**/*" to capture
+# all files in the sat-api directory. Without the filter, only the top-level
+# directory entry is copied, not its contents.
+
 appId: com.gabo.desktop
 productName: Gabo
 copyright: Copyright 2026
@@ -10,9 +32,14 @@ files:
   - out/**/*
   - package.json
 
+# Include the PyInstaller onedir bundle as a sidecar resource.
+# The bundle is built by `npm run build:sidecar` (calls pyinstaller with sat-api.spec).
+# At runtime, sidecar.ts resolves: process.resourcesPath + "/sidecar/sat-api/sat-api[.exe]"
 extraResources:
-  - from: pyinstaller/dist/sat-api
-    to: sidecar/sat-api
+  - from: pyinstaller/dist/sat-api/
+    to: sidecar/sat-api/
+    filter:
+      - "**/*"
 
 mac:
   category: public.app-category.productivity
@@ -22,6 +49,7 @@ mac:
   icon: build/icon.icns
   hardenedRuntime: true
   gatekeeperAssess: false
+  # Code signing env vars: CSC_LINK, CSC_KEY_PASSWORD (set in CI secrets)
 
 dmg:
   contents:
@@ -31,3 +59,20 @@ dmg:
       y: 220
       type: link
       path: /Applications
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # TODO: Create build/icon.ico from build/icon.png using ImageMagick:
+  #   magick build/icon.png -define icon:auto-resize=256,128,64,32,16 build/icon.ico
+  # Windows code signing: CSC_LINK, CSC_KEY_PASSWORD env vars (deferred)
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  deleteAppDataOnUninstall: false

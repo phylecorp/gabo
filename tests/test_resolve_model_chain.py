@@ -23,7 +23,6 @@ backend resolve chain applies. This file tests both paths.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -92,13 +91,17 @@ class TestExplicitModelParam:
 
     def test_explicit_model_wins_for_anthropic(self, tmp_config):
         """Explicit model param works for Anthropic provider."""
-        tmp_config.write_text(json.dumps({"providers": {"anthropic": {"default_model": "claude-opus-4-6"}}}))
+        tmp_config.write_text(
+            json.dumps({"providers": {"anthropic": {"default_model": "claude-opus-4-6"}}})
+        )
         cfg = ProviderConfig(provider="anthropic", model="claude-sonnet-4-6")
         assert cfg.resolve_model() == "claude-sonnet-4-6"
 
     def test_explicit_model_wins_for_gemini(self, tmp_config):
         """Explicit model param works for Gemini provider."""
-        tmp_config.write_text(json.dumps({"providers": {"gemini": {"default_model": "gemini-2.5-pro"}}}))
+        tmp_config.write_text(
+            json.dumps({"providers": {"gemini": {"default_model": "gemini-2.5-pro"}}})
+        )
         cfg = ProviderConfig(provider="gemini", model="gemini-2.0-flash")
         assert cfg.resolve_model() == "gemini-2.0-flash"
 
@@ -119,15 +122,17 @@ class TestConfigFileModelFallback:
 
     def test_model_none_falls_through_for_anthropic(self, tmp_config):
         """Config file fallback works for Anthropic provider."""
-        tmp_config.write_text(json.dumps({
-            "providers": {"anthropic": {"default_model": "claude-haiku-4-5-20251001"}}
-        }))
+        tmp_config.write_text(
+            json.dumps({"providers": {"anthropic": {"default_model": "claude-haiku-4-5-20251001"}}})
+        )
         cfg = ProviderConfig(provider="anthropic", model=None)
         assert cfg.resolve_model() == "claude-haiku-4-5-20251001"
 
     def test_model_none_falls_through_for_gemini(self, tmp_config):
         """Config file fallback works for Gemini provider."""
-        tmp_config.write_text(json.dumps({"providers": {"gemini": {"default_model": "gemini-2.0-flash"}}}))
+        tmp_config.write_text(
+            json.dumps({"providers": {"gemini": {"default_model": "gemini-2.0-flash"}}})
+        )
         cfg = ProviderConfig(provider="gemini", model=None)
         assert cfg.resolve_model() == "gemini-2.0-flash"
 
@@ -141,7 +146,9 @@ class TestConfigFileModelFallback:
 
     def test_missing_provider_in_config_falls_through(self, tmp_config):
         """If provider has no entry in config.json, falls through to env/built-in."""
-        tmp_config.write_text(json.dumps({"providers": {"anthropic": {"default_model": "claude-opus-4-6"}}}))
+        tmp_config.write_text(
+            json.dumps({"providers": {"anthropic": {"default_model": "claude-opus-4-6"}}})
+        )
         cfg = ProviderConfig(provider="openai", model=None)
         # No openai entry → falls through to built-in default
         result = cfg.resolve_model()

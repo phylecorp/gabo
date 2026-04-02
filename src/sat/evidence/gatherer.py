@@ -234,21 +234,7 @@ async def _run_research(
             events=bus,
         )
 
-    items: list[EvidenceItem] = []
-    for n, claim in enumerate(research_result.claims, start=1):
-        item = EvidenceItem(
-            item_id=f"R-C{n}",
-            claim=claim.claim,
-            source="research",
-            source_ids=list(claim.source_ids),
-            category=claim.category,
-            confidence=_normalize_confidence(claim.confidence),
-            entities=[],
-            verified=claim.verified,
-            selected=True,
-            provider_name=research_result.research_provider,
-        )
-        items.append(item)
+    items = _build_items_from_research_result(research_result)
 
     # Convert sources to plain dicts
     sources_dicts = [
@@ -339,3 +325,55 @@ def _merge_and_deduplicate(
             ordered.append(item)
 
     return ordered
+
+
+def _build_items_from_research_result(research_result: object) -> list[EvidenceItem]:
+    """Convert ResearchResult claims to EvidenceItems, propagating source URLs.
+
+    Builds a source-id-to-URL index from the research result's sources list,
+    then populates each EvidenceItem's source_urls field by looking up the URLs
+    for each claim's source_ids. Sources with url=None are silently skipped so
+    source_urls never contains empty strings.
+
+    Args:
+        research_result: A ResearchResult instance (typed as object to avoid
+            circular imports; duck-typed at runtime).
+
+    Returns:
+        List of EvidenceItems with R-C{n} IDs and source_urls populated.
+    """
+    # Build source_id -> URL index (skip sources with no URL)
+    url_index: dict[str, str] = {}
+    for source in getattr(research_result, "sources", []):
+        if source.url:
+            url_index[source.id] = source.url
+
+    items: list[EvidenceItem] = []
+    provider = getattr(research_result, "research_provider", None)
+
+    for n, claim in enumerate(getattr(research_result, "claims", []), start=1):
+        # Collect URLs for this claim's source references (preserving order, no duplicates)
+        seen_urls: set[str] = set()
+        source_urls: list[str] = []
+        for sid in getattr(claim, "source_ids", []):
+            url = url_index.get(sid)
+            if url and url not in seen_urls:
+                source_urls.append(url)
+                seen_urls.add(url)
+
+        item = EvidenceItem(
+            item_id=f"R-C{n}",
+            claim=claim.claim,
+            source="research",
+            source_ids=list(claim.source_ids),
+            category=claim.category,
+            confidence=_normalize_confidence(claim.confidence),
+            entities=[],
+            verified=claim.verified,
+            selected=True,
+            provider_name=provider,
+            source_urls=source_urls,
+        )
+        items.append(item)
+
+    return items

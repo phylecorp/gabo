@@ -355,16 +355,25 @@ async def run_analysis(
             if config.research.gap_resolution.enabled and research_result.gaps_identified:
                 try:
                     from sat.research.gap_resolver import resolve_gaps
-                    from sat.research.registry import create_research_provider as _create_rp
 
                     console.print(
                         f"[bold blue]Resolving {len(research_result.gaps_identified)} information gap(s)...[/bold blue]"
                     )
-                    gap_provider = _create_rp(
-                        provider_name=config.research.provider,
-                        api_key=config.research.api_key,
-                        llm_provider=provider,
-                    )
+                    # Use multi-provider research for gap resolution when mode=="multi"
+                    # so follow-up queries benefit from the same cross-validated evidence
+                    # quality as the initial research phase (DEC-RESEARCH-014).
+                    if config.research.mode == "multi":
+                        from sat.research.multi_runner import MultiResearchAdapter
+
+                        gap_provider = MultiResearchAdapter(llm_provider=provider)
+                    else:
+                        from sat.research.registry import create_research_provider as _create_rp
+
+                        gap_provider = _create_rp(
+                            provider_name=config.research.provider,
+                            api_key=config.research.api_key,
+                            llm_provider=provider,
+                        )
                     research_result = await resolve_gaps(
                         research_result=research_result,
                         research_provider=gap_provider,
@@ -502,9 +511,26 @@ async def run_analysis(
 
     # @decision DEC-PIPE-006: Build TechniqueEvidence once before technique execution.
     # Combines final evidence text with structured EvidenceItems from research.
+    # @decision DEC-SYNDICATION-002
+    # @title Inject syndication summary into technique evidence text
+    # @status accepted
+    # @rationale Techniques receive evidence as a text string. Appending the syndication
+    # summary to that string is the least-invasive injection point: no technique or prompt
+    # changes required, and the warning appears only when syndication is detected.
+    # The summary is appended after a separator so it's visually distinct from evidence.
     technique_evidence: TechniqueEvidence | None = None
     if config.evidence:
-        technique_evidence = TechniqueEvidence(text=config.evidence, items=evidence_items)
+        evidence_text = config.evidence
+        if evidence_items:
+            try:
+                from sat.evidence.syndication import build_syndication_summary
+
+                syndication_note = build_syndication_summary(evidence_items)
+                if syndication_note:
+                    evidence_text = f"{evidence_text}\n\n---\n{syndication_note}"
+            except Exception:
+                logger.debug("Syndication summary failed — skipping", exc_info=True)
+        technique_evidence = TechniqueEvidence(text=evidence_text, items=evidence_items)
 
     # Phase 2: Execute techniques in dependency layers
     # @decision DEC-PIPE-003: Layer-based parallel technique execution.
@@ -536,6 +562,7 @@ async def run_analysis(
                         evidence=technique_evidence,
                         prior_results=prior_results,
                     )
+                    await bus.emit(StageStarted(stage="analysis", technique_id=tid))
                     try:
                         result = await technique.execute(ctx, provider)
                     except Exception as first_exc:
@@ -555,6 +582,7 @@ async def run_analysis(
                     prior_results[tid] = result
                     completed.append(tid)
                     progress.update(task, description=f"✅ [green]Done:[/green] {meta.name}")
+                    await bus.emit(StageCompleted(stage="analysis", technique_id=tid))
 
                     # Run adversarial analysis on this technique's output
                     if adversarial_session:

@@ -65,6 +65,7 @@ export default function NewAnalysis() {
     question?: string
     techniques?: string[]
     adversarialEnabled?: boolean
+    priorRunId?: string  // when set, carry forward evidence pool from this run
   } | undefined
   const { baseUrl, wsBaseUrl, client } = useApiContext()
   const { startAnalysis } = useAnalysis()
@@ -77,6 +78,7 @@ export default function NewAnalysis() {
     sessionId: evidenceSessionId,
     toggleItem,
     updateItem,
+    addItem,
     selectAll,
     deselectAll,
     selectByFilter,
@@ -119,6 +121,7 @@ export default function NewAnalysis() {
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loadingPriorEvidence, setLoadingPriorEvidence] = useState(false)
 
   const effectiveProvider = provider || defaultProvider
 
@@ -128,8 +131,8 @@ export default function NewAnalysis() {
   const selectedProviderInfo = providers.find(p => p.name === effectiveProvider)
   const effectiveModel = modelOverride.trim() || selectedProviderInfo?.default_model || null
 
-  const canSubmit = question.trim().length > 0 && !submitting
-  const canGather = question.trim().length > 0 && !submitting && (evidence.trim().length > 0 || researchEnabled)
+  const canSubmit = question.trim().length > 0 && !submitting && !loadingPriorEvidence
+  const canGather = question.trim().length > 0 && !submitting && !loadingPriorEvidence && (evidence.trim().length > 0 || researchEnabled)
 
   // Auto-recover step from active evidence session (survives navigation)
   useEffect(() => {
@@ -152,6 +155,49 @@ export default function NewAnalysis() {
       setStep('configure')
     }
   }, [step, gatherProgress.status, gatherProgress.error])
+
+  // Load prior evidence pool on mount when prefill.priorRunId is set.
+  // Fetches the prior run's evidence.json, imports it verbatim into a new
+  // session, then skips the configure step and lands directly in review.
+  //
+  // @decision DEC-DESKTOP-REANALYZE-002
+  // @title NewAnalysis: auto-transition to review when priorRunId is present
+  // @status accepted
+  // @rationale When a user clicks "Re-analyze with Evidence" from RunDetail or
+  //   EvidenceDetail, they expect to land in the review step with prior evidence
+  //   pre-loaded. The configure step is still rendered during loading (showing the
+  //   loading indicator) so the user sees immediate feedback. On success, setStep('review')
+  //   transitions to the review step — the user can still go back to configure via the
+  //   Back button in EvidenceReview. Errors fall back to configure with an error message.
+  //   The effect runs only once (empty deps) — priorRunId is a mount-time value from
+  //   navigation state, not a reactive value that should re-trigger on state changes.
+  useEffect(() => {
+    if (!prefill?.priorRunId || !client) return
+    let cancelled = false
+    setLoadingPriorEvidence(true)
+
+    async function loadPriorEvidence() {
+      try {
+        const priorPool = await client!.getRunEvidence(prefill!.priorRunId!)
+        if (cancelled || !priorPool) {
+          setLoadingPriorEvidence(false)
+          return
+        }
+        const { session_id, pool } = await client!.importEvidencePool(priorPool)
+        if (cancelled) return
+        setPrebuiltPool(pool, session_id)
+        setStep('review')
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load prior evidence')
+        }
+      } finally {
+        if (!cancelled) setLoadingPriorEvidence(false)
+      }
+    }
+    loadPriorEvidence()
+    return () => { cancelled = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps — intentionally run once on mount
 
   // --- Direct single-shot analysis (or routes to review when evidence present) ---
   async function handleSubmit(e: FormEvent) {
@@ -323,7 +369,26 @@ export default function NewAnalysis() {
           onUpdateItem={(itemId, updates) => {
             if (evidenceSessionId) updateItem(evidenceSessionId, itemId, updates)
           }}
+          onAddItem={(data) => {
+            if (evidenceSessionId) addItem(evidenceSessionId, data)
+          }}
         />
+      </div>
+    )
+  }
+
+  // -------------------------------------------------------------------------
+  // Render: loading prior evidence (prefill.priorRunId is set and fetch in flight)
+  // -------------------------------------------------------------------------
+  if (loadingPriorEvidence) {
+    return (
+      <div className="new-analysis">
+        <div className="new-analysis-header">
+          <h2 className="new-analysis-title">Loading Evidence</h2>
+          <span className="new-analysis-subtitle text-muted text-xs">
+            Importing evidence from prior analysis...
+          </span>
+        </div>
       </div>
     )
   }

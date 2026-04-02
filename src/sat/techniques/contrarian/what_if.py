@@ -28,6 +28,11 @@ class WhatIfAnalysis(Technique):
     def output_schema(self) -> type[ArtifactResult]:
         return WhatIfResult
 
+    @property
+    def temperature(self) -> float | None:
+        """Higher temperature enables imaginative backward reasoning for what-if analysis."""
+        return 0.9
+
     def build_prompt(self, ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         return build_prompt(ctx)
 

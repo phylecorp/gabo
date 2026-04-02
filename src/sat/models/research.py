@@ -42,6 +42,10 @@ class ResearchClaim(BaseModel):
     verification_verdict: str | None = Field(
         default=None, description="Verification verdict if verified"
     )
+    origin: str | None = Field(
+        default=None,
+        description="Pipeline stage that produced this claim, e.g. 'gap_resolution_iter_1'",
+    )
 
 
 class ResearchResult(ArtifactResult):

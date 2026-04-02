@@ -28,6 +28,11 @@ class AltFuturesAnalysis(Technique):
     def output_schema(self) -> type[ArtifactResult]:
         return AltFuturesResult
 
+    @property
+    def temperature(self) -> float | None:
+        """Higher temperature enables diverse scenario generation for alternative futures."""
+        return 0.9
+
     def build_prompt(self, ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         return build_prompt(ctx)
 

@@ -28,6 +28,11 @@ class HighImpactAnalysis(Technique):
     def output_schema(self) -> type[ArtifactResult]:
         return HighImpactResult
 
+    @property
+    def temperature(self) -> float | None:
+        """Higher temperature enables creative low-probability pathway construction for high-impact analysis."""
+        return 0.9
+
     def build_prompt(self, ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         return build_prompt(ctx)
 

@@ -54,6 +54,7 @@ from sat.config import (
     ProviderConfig,
     ReportConfig,
     ResearchConfig,
+    get_default_runs_dir,
 )
 from sat.pipeline import run_analysis
 
@@ -64,27 +65,50 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_output_dir(output_dir: str) -> Path:
-    """Validate that output_dir is a safe relative path within the CWD.
+    """Validate that output_dir is safe: either relative (within CWD) or absolute
+    within the configured runs directory.
 
-    Rejects absolute paths and paths containing '..' traversal sequences.
+    Accepts:
+    - Relative paths without '..' — resolved against CWD (CLI compat, "." is fine)
+    - Absolute paths that are within get_default_runs_dir() — the stable location
+      for packaged app runs
+
+    Rejects:
+    - Relative paths containing '..' traversal sequences
+    - Absolute paths outside both CWD and the configured runs directory
+
     Returns the resolved Path on success, raises HTTPException(400) on failure.
 
     @decision DEC-SEC-006
-    @title output_dir validated against CWD to prevent path traversal
+    @title output_dir validated against CWD and runs dir to prevent path traversal
     @status accepted
     @rationale An unchecked output_dir allows callers to write run artifacts
-    to arbitrary filesystem locations (e.g. ../../etc). The check rejects
-    absolute paths and resolves the path against CWD, then verifies the
-    result stays within CWD. Symlinks are resolved (realpath) to prevent
-    symlink-based traversal bypasses.
+    to arbitrary filesystem locations (e.g. ../../etc). The check now accepts
+    two safe bases: CWD (for CLI compat, relative paths) and ~/.sat/runs/
+    (for packaged app use). Symlinks are resolved (realpath) to prevent
+    symlink-based traversal bypasses (DEC-SEC-011).
     """
-    if os.path.isabs(output_dir):
-        raise HTTPException(status_code=400, detail="output_dir must be a relative path")
     if ".." in Path(output_dir).parts:
         raise HTTPException(status_code=400, detail="output_dir must not contain '..'")
+
+    if os.path.isabs(output_dir):
+        # Absolute path: must be within the configured runs directory
+        runs_dir = Path(os.path.realpath(get_default_runs_dir()))
+        resolved = Path(os.path.realpath(output_dir))
+        if not (
+            str(resolved) == str(runs_dir)
+            or str(resolved).startswith(str(runs_dir) + os.sep)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="output_dir must be within the runs directory",
+            )
+        return resolved
+
+    # Relative path: resolve against CWD (preserves CLI compatibility)
     resolved = Path(os.path.realpath(output_dir))
     cwd = Path(os.path.realpath("."))
-    if not str(resolved).startswith(str(cwd)):
+    if not (str(resolved) == str(cwd) or str(resolved).startswith(str(cwd) + os.sep)):
         raise HTTPException(
             status_code=400, detail="output_dir must be within the working directory"
         )
@@ -147,8 +171,12 @@ def create_analysis_router(
         If the concurrency cap is reached, the run is queued and queue_position
         is set in the response so the frontend can show queued state.
         """
-        # Validate output_dir and techniques before starting the run
-        _validate_output_dir(request.output_dir)
+        # Resolve output_dir: None means "use the stable default runs directory"
+        # (DEC-RUNS-001). An explicit "." preserves CLI / dev-mode behaviour.
+        effective_output_dir = request.output_dir if request.output_dir is not None else str(get_default_runs_dir())
+
+        # Validate and canonicalise the resolved path before starting the run
+        resolved_output_dir = _validate_output_dir(effective_output_dir)
         try:
             _validate_techniques(request.techniques)
         except ValueError as exc:
@@ -184,7 +212,7 @@ def create_analysis_router(
             name=request.name,
             evidence=request.evidence,
             techniques=request.techniques,
-            output_dir=Path(request.output_dir),
+            output_dir=resolved_output_dir,
             provider=provider_cfg,
             research=research_cfg,
             adversarial=adversarial_cfg,

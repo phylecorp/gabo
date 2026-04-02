@@ -117,6 +117,36 @@ PROVIDER_API_KEY_ENVS = {
 }
 
 
+def get_default_runs_dir() -> Path:
+    """Return the stable directory for analysis run output.
+
+    @decision DEC-RUNS-001
+    @title Use ~/.sat/runs/ as the stable write location for analysis runs
+    @status accepted
+    @rationale In packaged Electron apps on macOS, the CWD is typically '/'
+    (inherited from the OS launcher via Finder or launchd). Writing run output
+    relative to CWD causes 'Permission denied' errors and produces runs that
+    disappear after an app restart because the CWD may change. ~/.sat/runs/ is
+    always writable by the running user, stable across restarts, and consistent
+    between dev and packaged modes.
+
+    The function creates the directory on first call (mode 0o700) so no manual
+    setup is required by users or CI. For tests and CI environments, the
+    SAT_RUNS_DIR environment variable overrides the default location without
+    requiring any internal patching.
+
+    CLI callers that explicitly pass output_dir are unaffected — the default
+    only applies when output_dir is None (i.e. omitted by the API client).
+    """
+    env_override = os.environ.get("SAT_RUNS_DIR")
+    if env_override:
+        runs_dir = Path(env_override)
+    else:
+        runs_dir = Path.home() / ".sat" / "runs"
+    runs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return runs_dir
+
+
 def _get_sat_config_path() -> Path:
     """Return the path to ~/.sat/config.json.
 
@@ -324,8 +354,10 @@ class GapResolutionConfig(BaseModel):
     """Configuration for iterative gap-driven research."""
 
     enabled: bool = Field(default=True, description="Enable gap resolution after initial research")
-    max_iterations: int = Field(default=2, description="Maximum gap resolution iterations")
-    max_sources_per_iteration: int = Field(default=5, description="Max sources per follow-up query")
+    max_iterations: int = Field(default=3, description="Maximum gap resolution iterations")
+    max_sources_per_iteration: int = Field(
+        default=10, description="Max sources per follow-up query"
+    )
 
 
 class ResearchConfig(BaseModel):
@@ -338,7 +370,7 @@ class ResearchConfig(BaseModel):
         description="Research provider: 'perplexity', 'brave', 'llm', 'auto'",
     )
     api_key: str | None = Field(default=None, description="API key for research provider")
-    max_sources: int = Field(default=10, description="Maximum sources to retrieve")
+    max_sources: int = Field(default=20, description="Maximum sources to retrieve")
     verification: "VerificationConfig" = Field(
         default_factory=lambda: VerificationConfig(),
         description="Source verification configuration",
@@ -418,6 +450,7 @@ class AnalysisConfig(BaseModel):
 
 
 __all__ = [
+    "get_default_runs_dir",
     "ProviderConfig",
     "AnalysisConfig",
     "AdversarialConfig",

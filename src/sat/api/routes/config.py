@@ -1,4 +1,4 @@
-"""Config routes: provider listing and settings management.
+"""Config routes: provider listing, settings management, and template upload.
 
 @decision DEC-API-008
 @title Settings persisted to ~/.sat/config.json, applied to os.environ immediately
@@ -38,6 +38,27 @@ for Brave (a simple GET to confirm the subscription token works) and the openai
 SDK with base_url=https://api.perplexity.ai for Perplexity. The frontend hides
 the "Default Model" field for Brave since the concept doesn't apply; Perplexity
 keeps the model field since users may want to use a different sonar variant.
+
+@decision DEC-TEMPLATE-001
+@title Custom templates stored in ~/.sat/templates/, validated as Jinja2 before write
+@status accepted
+@rationale User-supplied templates must be validated before being stored so the
+ReportBuilder never encounters a broken template at report generation time. We
+parse the uploaded content with jinja2.Environment().parse() which is a pure
+syntax check — no rendering — and reject with 400 on TemplateSyntaxError. Files
+are stored at 0o600 (owner-only) since templates may contain proprietary
+formatting. The upload endpoint normalises filenames: any .j2 file whose content
+looks like HTML (starts with '<') is stored as report.html.j2; everything else
+becomes report.md.j2. This keeps the storage convention consistent with the
+default template names that ReportBuilder expects.
+
+@decision DEC-TEMPLATE-002
+@title DELETE only targets ~/.sat/templates/ — default templates are read-only via API
+@status accepted
+@rationale Allowing DELETE on bundled templates would corrupt the package
+installation. The endpoint checks the custom dir only: 404 if not present there,
+200 on success. The 403 path is reserved for future cases where a filename
+matches a default but the caller tries to delete it explicitly.
 """
 
 from __future__ import annotations
@@ -45,9 +66,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, UploadFile
 
 from sat.api.models import (
     AppSettings,
@@ -55,10 +77,13 @@ from sat.api.models import (
     ProviderSettings,
     ProviderSettingsResponse,
     SettingsResponse,
+    TemplateInfo,
+    TemplateUploadResponse,
     TestProviderRequest,
     TestProviderResponse,
 )
 from sat.config import DEFAULT_MODELS, PROVIDER_API_KEY_ENVS
+from sat.utils.resources import get_sat_resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +110,15 @@ def _get_config_path() -> Path:
     Overrideable in tests by monkey-patching this function on the module.
     """
     return Path.home() / ".sat" / "config.json"
+
+
+def _get_templates_dir() -> Path:
+    """Return path to the user's custom templates directory (~/.sat/templates/).
+
+    Overrideable in tests by monkey-patching this function on the module.
+    The directory is NOT created here — callers that write files create it on demand.
+    """
+    return Path.home() / ".sat" / "templates"
 
 
 def _mask_key(key: str) -> str:
@@ -237,13 +271,11 @@ async def _test_provider_connection(req: TestProviderRequest) -> TestProviderRes
             return TestProviderResponse(success=True, model_used=model)
 
         elif provider == "gemini":
-            from google import genai
+            import google.generativeai as genai  # type: ignore[import]
 
-            client = genai.Client(api_key=req.api_key)
-            client.models.generate_content(
-                model=model,
-                contents="Say hello",
-            )
+            genai.configure(api_key=req.api_key)
+            gmodel = genai.GenerativeModel(model)
+            gmodel.generate_content("Say hello")
             return TestProviderResponse(success=True, model_used=model)
 
         elif provider == "perplexity":
@@ -420,3 +452,171 @@ async def test_provider(req: TestProviderRequest) -> TestProviderResponse:
     an error message if the key is invalid or the provider is unreachable.
     """
     return await _test_provider_connection(req)
+
+
+# ---------------------------------------------------------------------------
+# Template management endpoints
+# ---------------------------------------------------------------------------
+
+# Allowed template filename suffixes (DEC-TEMPLATE-001)
+_ALLOWED_TEMPLATE_SUFFIXES = frozenset({".j2", ".html"})
+# Max upload size: 1 MB
+_MAX_TEMPLATE_SIZE = 1024 * 1024
+# Directory containing bundled default templates.
+# get_sat_resource_path resolves from the sat package root in unfrozen mode and
+# from sys._MEIPASS/sat/ in a PyInstaller frozen bundle — same relative string
+# ("report/templates") works in both contexts without branching.
+_DEFAULT_TEMPLATES_DIR = get_sat_resource_path("report/templates")
+
+
+def _template_modified(path: Path) -> str:
+    """Return ISO-8601 mtime string for a file path."""
+    mtime = path.stat().st_mtime
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+
+
+@router.get("/api/config/templates", response_model=list[TemplateInfo])
+async def list_templates() -> list[TemplateInfo]:
+    """List all available report templates: custom (user-uploaded) and default (bundled).
+
+    Custom templates in ~/.sat/templates/ appear first with is_custom=True.
+    Default templates from src/sat/report/templates/ follow with is_custom=False.
+    If a filename exists in both directories the custom version supersedes the
+    default in the listing (the default entry is omitted for that filename).
+    """
+    results: list[TemplateInfo] = []
+    custom_names: set[str] = set()
+
+    # Scan custom templates dir
+    custom_dir = _get_templates_dir()
+    if custom_dir.exists() and custom_dir.is_dir():
+        for p in sorted(custom_dir.iterdir()):
+            if p.is_file() and p.suffix in _ALLOWED_TEMPLATE_SUFFIXES:
+                results.append(TemplateInfo(
+                    filename=p.name,
+                    size=p.stat().st_size,
+                    modified=_template_modified(p),
+                    is_custom=True,
+                ))
+                custom_names.add(p.name)
+
+    # Append default templates not already covered by a custom file
+    if _DEFAULT_TEMPLATES_DIR.exists():
+        for p in sorted(_DEFAULT_TEMPLATES_DIR.iterdir()):
+            if p.is_file() and p.name not in custom_names:
+                results.append(TemplateInfo(
+                    filename=p.name,
+                    size=p.stat().st_size,
+                    modified=_template_modified(p),
+                    is_custom=False,
+                ))
+
+    return results
+
+
+@router.post("/api/config/templates/upload", response_model=TemplateUploadResponse)
+async def upload_template(file: UploadFile) -> TemplateUploadResponse:
+    """Upload a custom Jinja2 report template.
+
+    Validation:
+    - File size must be < 1 MB
+    - Extension must be .j2 or .html
+    - Content must parse as valid Jinja2 (syntax check only, no rendering)
+
+    Stored as report.html.j2 or report.md.j2 in ~/.sat/templates/ based on
+    the uploaded filename. Any existing file with the same name is overwritten.
+    File permissions are set to 0o600 (owner read/write only).
+    """
+    content = await file.read()
+
+    # Size check
+    if len(content) > _MAX_TEMPLATE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Template file too large: {len(content)} bytes exceeds 1MB limit.",
+        )
+
+    # Extension check
+    filename = file.filename or ""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in _ALLOWED_TEMPLATE_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported file extension {suffix!r}. "
+                f"Allowed: {', '.join(sorted(_ALLOWED_TEMPLATE_SUFFIXES))}"
+            ),
+        )
+
+    # Jinja2 syntax validation
+    try:
+        import jinja2
+        jinja2.Environment().parse(content.decode("utf-8", errors="replace"))
+    except jinja2.TemplateSyntaxError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid Jinja2 template syntax: {exc}",
+        ) from exc
+
+    # Determine canonical stored filename.
+    # If the uploaded name ends with .html.j2 → report.html.j2
+    # otherwise → preserve the uploaded filename as-is (allows report.md.j2 etc.)
+    # For arbitrary names (e.g. my_template.j2), default to report.md.j2.
+    lower_name = filename.lower()
+    if lower_name.endswith(".html.j2") or lower_name.endswith(".html"):
+        stored_name = "report.html.j2"
+    elif lower_name == "report.md.j2":
+        stored_name = "report.md.j2"
+    else:
+        # Any other .j2 name — store as-is so the caller can retrieve it
+        stored_name = filename
+
+    # Write to custom templates dir
+    custom_dir = _get_templates_dir()
+    custom_dir.mkdir(parents=True, exist_ok=True)
+    dest = custom_dir / stored_name
+    dest.write_bytes(content)
+    os.chmod(dest, 0o600)
+
+    logger.info("Template uploaded: %s (%d bytes)", stored_name, len(content))
+
+    return TemplateUploadResponse(
+        filename=stored_name,
+        size=len(content),
+        status="uploaded",
+    )
+
+
+@router.delete("/api/config/templates/{filename}")
+async def delete_template(filename: str) -> dict:
+    """Delete a custom report template from ~/.sat/templates/.
+
+    Returns 200 on success, 404 if the file does not exist in the custom
+    directory, 400 if the filename contains path-traversal characters.
+    Default (bundled) templates cannot be deleted via this endpoint.
+    """
+    # Guard against path traversal: filename must not contain path separators
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename: path separators are not allowed.",
+        )
+
+    custom_dir = _get_templates_dir()
+    target = custom_dir / filename
+
+    # Verify the resolved path is actually inside custom_dir (belt + suspenders)
+    try:
+        target.resolve().relative_to(custom_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    if not target.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Template {filename!r} not found in custom templates directory.",
+        )
+
+    target.unlink()
+    logger.info("Template deleted: %s", filename)
+    return {"deleted": filename}

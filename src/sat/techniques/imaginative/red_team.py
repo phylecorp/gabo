@@ -28,6 +28,11 @@ class RedTeamAnalysis(Technique):
     def output_schema(self) -> type[ArtifactResult]:
         return RedTeamResult
 
+    @property
+    def temperature(self) -> float | None:
+        """Higher temperature enables adversarial creative thinking for red team analysis."""
+        return 0.9
+
     def build_prompt(self, ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         return build_prompt(ctx)
 

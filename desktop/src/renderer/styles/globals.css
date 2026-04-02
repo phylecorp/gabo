@@ -114,7 +114,7 @@ body {
 }
 
 .sidebar-header {
-  padding: 20px 16px 12px;
+  padding: 38px 16px 12px;
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
@@ -171,15 +171,25 @@ body {
   text-align: center;
 }
 
+.sidebar-icon-lg {
+  font-size: 16px;
+}
+
 .sidebar-footer {
   padding: 12px 16px;
   border-top: 1px solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .sidebar-status {
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .status-dot {
@@ -192,22 +202,11 @@ body {
 .status-dot-error { background: var(--color-signal-red); }
 .status-dot-warn { background: var(--color-signal-amber); }
 
-/* TopBar */
-.topbar {
-  height: 48px;
-  display: flex;
-  align-items: center;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-secondary);
+/* Drag strip — replaces TopBar's macOS traffic-light clearance */
+.app-drag-strip {
+  height: 38px;
   flex-shrink: 0;
-}
-
-.topbar-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  margin: 0;
+  -webkit-app-region: drag;
 }
 
 /* IntelCard */
@@ -3684,4 +3683,260 @@ body {
   color: var(--color-text-muted);
   font-style: italic;
   animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+/* ============================================================
+   WELCOME DASHBOARD (Issue #15)
+   Replaces blank empty state with structured onboarding.
+   ============================================================ */
+
+.welcome {
+  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+}
+
+/* Header */
+.welcome-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 32px 0 8px;
+}
+
+.welcome-logo-mark {
+  font-size: 40px;
+  color: var(--color-signal-cyan);
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.welcome-title {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  letter-spacing: -0.5px;
+  margin: 0;
+}
+
+.welcome-subtitle {
+  font-size: 14px;
+  margin: 0;
+}
+
+/* Provider warning banner */
+.welcome-provider-warn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(240, 168, 48, 0.08);
+  border: 1px solid rgba(240, 168, 48, 0.3);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-signal-amber);
+}
+
+.welcome-warn-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+/* Section headings */
+.welcome-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.welcome-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin: 0;
+}
+
+/* Feature cards grid */
+.welcome-features-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .welcome-features-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.welcome-feature-card {
+  display: flex;
+  gap: 14px;
+  padding: 16px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+}
+
+.welcome-feature-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  width: 28px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.welcome-feature-icon-cyan   { color: var(--color-signal-cyan); }
+.welcome-feature-icon-green  { color: var(--color-signal-green); }
+.welcome-feature-icon-amber  { color: var(--color-signal-amber); }
+.welcome-feature-icon-purple { color: var(--color-signal-purple); }
+
+.welcome-feature-card-cyan   { border-left: 2px solid var(--color-signal-cyan); }
+.welcome-feature-card-green  { border-left: 2px solid var(--color-signal-green); }
+.welcome-feature-card-amber  { border-left: 2px solid var(--color-signal-amber); }
+.welcome-feature-card-purple { border-left: 2px solid var(--color-signal-purple); }
+
+.welcome-feature-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.welcome-feature-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.welcome-feature-desc {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Numbered steps */
+.welcome-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.welcome-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 12px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+}
+
+.welcome-step-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(34, 211, 238, 0.12);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  color: var(--color-signal-cyan);
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.welcome-step-text {
+  font-size: 13px;
+  line-height: 1.5;
+  padding-top: 2px;
+}
+
+/* Good at / Not ideal for */
+.welcome-fit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .welcome-fit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.welcome-fit-card {
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.welcome-fit-good {
+  border-top: 2px solid var(--color-signal-green);
+}
+
+.welcome-fit-caution {
+  border-top: 2px solid var(--color-signal-amber);
+}
+
+.welcome-fit-heading {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 10px;
+  color: var(--color-text-secondary);
+}
+
+.welcome-fit-good .welcome-fit-heading {
+  color: var(--color-signal-green);
+}
+
+.welcome-fit-caution .welcome-fit-heading {
+  color: var(--color-signal-amber);
+}
+
+.welcome-fit-list {
+  margin: 0;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.welcome-fit-list li {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+/* CTA row */
+.welcome-cta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 32px;
+}
+
+.welcome-cta-secondary {
+  text-decoration: none;
+}
+
+/* Inline links */
+.welcome-link {
+  color: var(--color-signal-cyan);
+  text-decoration: none;
+}
+
+.welcome-link:hover {
+  text-decoration: underline;
 }

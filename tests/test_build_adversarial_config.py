@@ -165,10 +165,11 @@ class TestBuildAdversarialConfigExplicitTriident:
         env = {
             "OPENAI_API_KEY": "oai-key",
         }
-        with patch.dict(os.environ, env, clear=True):
-            cfg = build_adversarial_config(
-                provider="anthropic", mode="trident"
-            )
+        with patch("sat.config._load_config_file_key", return_value=None):
+            with patch.dict(os.environ, env, clear=True):
+                cfg = build_adversarial_config(
+                    provider="anthropic", mode="trident"
+                )
         # No Gemini key, so investigator cannot be resolved — providers dict has 2 entries
         assert "investigator" not in cfg.providers
 

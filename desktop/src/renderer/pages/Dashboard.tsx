@@ -20,6 +20,7 @@ import { useProviders } from '../hooks/useProviders'
 import IntelCard from '../components/common/IntelCard'
 import ErrorState from '../components/common/ErrorState'
 import { useToast } from '../components/common/Toast'
+import Welcome from '../components/Welcome'
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()
@@ -153,25 +154,7 @@ export default function Dashboard() {
       )}
 
       {!runsLoading && (!runs || runs.length === 0) && (
-        <div className="dashboard-empty">
-          <div className="dashboard-empty-icon">◎</div>
-          <h3 className="dashboard-empty-title">No Analyses Yet</h3>
-          <p className="dashboard-empty-desc text-secondary text-sm">
-            Configure a new analysis to begin applying structured analytic techniques
-            to your intelligence question.
-          </p>
-          {!hasProviders && (
-            <p className="dashboard-empty-warn text-sm">
-              Configure at least one LLM provider API key to enable analysis.
-            </p>
-          )}
-          <button
-            className="btn-primary"
-            onClick={() => navigate('/new')}
-          >
-            Start First Analysis
-          </button>
-        </div>
+        <Welcome hasProviders={hasProviders} />
       )}
 
       {runs && runs.length > 0 && (

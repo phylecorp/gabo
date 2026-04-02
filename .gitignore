@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -8,6 +9,24 @@ build/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
-.claude/.*
+
+# Secrets
 .env
+
+# SAT run output
 sat-*/
+
+# Claude Code working state
+.claude/
+
+# Worktrees
+.worktrees/
+
+# Temp files
+tmp/
+
+# macOS
+.DS_Store
+
+# Local decision logs (not part of source)
+DECISIONS.md

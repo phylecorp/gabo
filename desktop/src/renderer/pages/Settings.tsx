@@ -30,11 +30,13 @@
  *   ModelSelect and <input> based on whether a non-empty model list arrived.
  *   Addresses REQ-P0-002 (model selection) and REQ-P1-002 (graceful degradation).
  */
-import { useState, type ChangeEvent } from 'react'
+import { useState, useRef, type ChangeEvent } from 'react'
 import { useSettings, useUpdateSettings, useTestProvider } from '../hooks/useSettings'
 import { useModels } from '../hooks/useModels'
-import type { ProviderSettingsResponse, TestProviderResponse, ModelInfo } from '../api/types'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import type { ProviderSettingsResponse, TestProviderResponse, ModelInfo, TemplateInfo } from '../api/types'
 import ErrorState from '../components/common/ErrorState'
+import { useApiContext } from '../api/context'
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
@@ -261,6 +263,8 @@ export default function Settings() {
         ))}
       </div>
 
+      <ReportTemplatesCard />
+
       <div className="settings-footer">
         {saveStatus === 'error' && saveError && (
           <span className="settings-save-error text-sm">
@@ -279,6 +283,152 @@ export default function Settings() {
         >
           {saveStatus === 'saving' ? 'Saving...' : 'Save Settings'}
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ReportTemplatesCard
+// ---------------------------------------------------------------------------
+
+/**
+ * Settings card for managing custom Jinja2 report templates.
+ *
+ * Shows the current template status (Default vs Custom), provides an upload
+ * button (accepts .j2 and .html files), and a Revert to Default button when
+ * a custom template exists. Brief requirements info helps users craft valid
+ * templates.
+ *
+ * @decision DEC-TEMPLATE-004
+ * @title ReportTemplatesCard uses React Query for template list + mutations
+ * @status accepted
+ * @rationale Consistent with other settings data patterns — useQuery for the
+ * list, useMutation for upload/delete. The file input is uncontrolled (ref)
+ * so the browser's native file picker handles selection without React state
+ * thrash on every keystroke. The input is reset after each upload attempt so
+ * the same file can be re-uploaded after edits.
+ */
+function ReportTemplatesCard() {
+  const { client } = useApiContext()
+  const queryClient = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
+
+  const { data: templates = [], isLoading } = useQuery({
+    queryKey: ['templates'],
+    queryFn: () => client.getTemplates(),
+  })
+
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => client.uploadTemplate(file),
+    onSuccess: (result) => {
+      setUploadError(null)
+      setUploadSuccess(`Uploaded ${result.filename} (${result.size} bytes)`)
+      queryClient.invalidateQueries({ queryKey: ['templates'] })
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      setTimeout(() => setUploadSuccess(null), 3000)
+    },
+    onError: (err: Error) => {
+      setUploadSuccess(null)
+      // Extract detail from FastAPI JSON error body if present
+      const msg = err.message ?? String(err)
+      const match = msg.match(/"detail"\s*:\s*"([^"]+)"/)
+      setUploadError(match ? match[1] : msg)
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (filename: string) => client.deleteTemplate(filename),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['templates'] })
+    },
+  })
+
+  function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadError(null)
+    setUploadSuccess(null)
+    uploadMutation.mutate(file)
+  }
+
+  const customTemplates = templates.filter((t: TemplateInfo) => t.is_custom)
+  const hasCustom = customTemplates.length > 0
+
+  return (
+    <div className="settings-provider-card">
+      <div className="settings-provider-header">
+        <div className="settings-provider-name-row">
+          <span className="settings-provider-name">Report Templates</span>
+          <span className={`intel-badge ${hasCustom ? 'badge-cyan' : 'badge-green'}`}>
+            {hasCustom ? 'Custom' : 'Default'}
+          </span>
+        </div>
+      </div>
+
+      <div className="form-section form-section-spaced">
+        <label className="form-label">Template Status</label>
+        {isLoading ? (
+          <span className="text-secondary text-xs">Loading templates...</span>
+        ) : hasCustom ? (
+          <div>
+            {customTemplates.map((t: TemplateInfo) => (
+              <div key={t.filename} className="settings-key-row">
+                <span className="text-xs text-secondary font-mono">{t.filename}</span>
+                <span className="text-xs text-secondary">{(t.size / 1024).toFixed(1)} KB</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs text-secondary">Using built-in default templates</span>
+        )}
+      </div>
+
+      <div className="form-section form-section-spaced">
+        <label className="form-label">Upload Custom Template</label>
+        <span className="form-label-hint text-xs">
+          Jinja2 template (.j2 or .html). Max 1 MB. Variables: question, bottom_line_assessment,
+          key_findings, techniques, date, and more. See default templates for reference.
+        </span>
+        <div className="settings-key-edit-actions" style={{ marginTop: '0.5rem' }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".j2,.html"
+            style={{ display: 'none' }}
+            onChange={handleFileChange}
+          />
+          <button
+            className="btn-secondary settings-btn-sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadMutation.isPending}
+          >
+            {uploadMutation.isPending ? 'Uploading...' : 'Choose Template File'}
+          </button>
+          {hasCustom && (
+            <button
+              className="btn-secondary settings-btn-sm settings-btn-danger"
+              onClick={() => {
+                customTemplates.forEach((t: TemplateInfo) => deleteMutation.mutate(t.filename))
+              }}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? 'Reverting...' : 'Revert to Default'}
+            </button>
+          )}
+        </div>
+        {uploadError && (
+          <div className="settings-test-result settings-test-fail text-xs" style={{ marginTop: '0.5rem' }}>
+            {uploadError}
+          </div>
+        )}
+        {uploadSuccess && (
+          <div className="settings-test-result settings-test-ok text-xs" style={{ marginTop: '0.5rem' }}>
+            {uploadSuccess}
+          </div>
+        )}
       </div>
     </div>
   )

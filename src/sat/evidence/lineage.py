@@ -13,7 +13,6 @@ post-hoc debugging and auditability.
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,7 +25,9 @@ class LineageEntry(BaseModel):
     stage: str = Field(
         description="Transformation stage: initial, ingestion, decomposition, preprocessing, research_merge"
     )
-    content_hash: str = Field(description="SHA-256 hash of the evidence text after this stage (first 16 hex chars)")
+    content_hash: str = Field(
+        description="SHA-256 hash of the evidence text after this stage (first 16 hex chars)"
+    )
     char_count: int = Field(description="Character count of evidence after this stage")
     timestamp: str = Field(description="ISO timestamp when this transformation occurred")
     metadata: dict[str, str | int | float | bool] = Field(

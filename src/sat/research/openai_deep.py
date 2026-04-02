@@ -18,6 +18,21 @@ rather than a module-level env var constant. This lets users configure the deep
 research model in ~/.sat/config.json or via OPENAI_RESEARCH_MODEL without
 restarting. Explicit constructor param wins; FALLBACK_MODEL (for 404 auto-
 downgrade) remains a module-level constant since it's not user-configurable.
+
+@decision DEC-RESEARCH-012
+@title Per-provider single retry on rate-limit failures during polling
+@status accepted
+@rationale OpenAI's deep research server returns status='failed' with a rate-limit
+error when TPM is exhausted mid-processing (e.g., "Rate limit reached... try again
+in 930ms"). The rate-limit window is sub-second to a few seconds, so a single
+retry after a brief delay recovers most failures without a full multi_runner retry
+cycle (which only fires when ALL providers fail). Implementation:
+- research() wraps the submit+poll sequence in a try/except for ResearchRequestFailed
+- If the error message contains "rate limit" (case-insensitive), parse the retry-after
+  delay from the message ("try again in Xms"), add a 0.5s buffer, cap at 10s, or
+  default to 2s if unparseable
+- Resubmit once (new response ID) and poll again; second failure propagates
+- Only one retry; no loop; non-rate-limit failures propagate immediately
 """
 
 from __future__ import annotations
@@ -25,13 +40,46 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 
 import httpx
 
 from sat.config import resolve_research_model
+from sat.events import EventBus, NullBus, ProviderPolling
 from sat.research.base import ResearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
+
+# Rate-limit retry constants (DEC-RESEARCH-012)
+_RATE_LIMIT_RETRY_BUFFER_S = 0.5   # seconds added to parsed delay as safety margin
+_RATE_LIMIT_RETRY_MAX_S = 10.0     # cap: never wait more than 10 seconds
+_RATE_LIMIT_RETRY_DEFAULT_S = 2.0  # fallback when ms value cannot be parsed
+
+
+def _parse_rate_limit_delay(error_message: str) -> float:
+    """Parse the retry delay from an OpenAI rate-limit error message.
+
+    OpenAI rate-limit messages include a suggestion like "Please try again in 930ms."
+    This function extracts the millisecond value, converts to seconds, adds a small
+    buffer for safety, and caps the result. Returns a default when parsing fails.
+
+    Args:
+        error_message: The error message from OpenAI's response (may be empty).
+
+    Returns:
+        Delay in seconds to wait before retrying.
+
+    Examples:
+        "Please try again in 930ms."  → 0.930 + 0.5 = 1.430s
+        "Please try again in 60000ms." → min(60.5, 10.0) = 10.0s
+        "Please try again later."      → 2.0s (default)
+    """
+    match = re.search(r"try again in (\d+)ms", error_message, re.IGNORECASE)
+    if not match:
+        return _RATE_LIMIT_RETRY_DEFAULT_S
+    ms_value = int(match.group(1))
+    delay = ms_value / 1000.0 + _RATE_LIMIT_RETRY_BUFFER_S
+    return min(delay, _RATE_LIMIT_RETRY_MAX_S)
 
 
 class ResearchRequestFailed(RuntimeError):
@@ -50,6 +98,11 @@ POLL_INTERVAL = 10  # seconds
 MAX_POLL_ATTEMPTS = 120  # 20 minutes max
 
 
+# Throttle: emit ProviderPolling every Nth attempt to avoid log flooding.
+# At 10s poll interval, every 4th attempt = ~every 40s (roughly once per minute).
+_POLL_EMIT_EVERY_N = 4
+
+
 class OpenAIDeepResearchProvider:
     """Research provider using OpenAI's deep research models."""
 
@@ -57,6 +110,7 @@ class OpenAIDeepResearchProvider:
         self,
         api_key: str | None = None,
         model: str | None = None,
+        events: EventBus | None = None,
     ) -> None:
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
@@ -65,6 +119,8 @@ class OpenAIDeepResearchProvider:
         self._base_url = "https://api.openai.com/v1"
         # Resolution: explicit param > config file > OPENAI_RESEARCH_MODEL env var > default
         self._primary_model = model or resolve_research_model("openai")
+        # EventBus for liveness events (DEC-RESEARCH-015). NullBus when not provided.
+        self._events: EventBus = events if events is not None else NullBus
 
     async def research(
         self,
@@ -72,32 +128,65 @@ class OpenAIDeepResearchProvider:
         context: str | None = None,
         max_sources: int = 10,
     ) -> ResearchResponse:
-        """Execute deep research via OpenAI Responses API."""
+        """Execute deep research via OpenAI Responses API.
+
+        Includes a single rate-limit retry (DEC-RESEARCH-012): if the initial
+        submit+poll cycle fails with a rate-limit error, waits the suggested delay
+        and resubmits once. A second failure on the retry propagates normally.
+        """
         topic = query
         if context:
             topic = f"{context}\n\n{query}"
 
-        # Try primary model first, fallback to o4-mini on 404
-        response_id = None
+        # Submit + poll with one rate-limit retry (DEC-RESEARCH-012).
         try:
-            response_id = await self._submit_request(topic, self._primary_model)
-            logger.info(f"Submitted deep research request {response_id} with {self._primary_model}")
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                logger.warning(f"{self._primary_model} not available, falling back to {FALLBACK_MODEL}")
-                response_id = await self._submit_request(topic, FALLBACK_MODEL)
-                logger.info(f"Submitted deep research request {response_id} with {FALLBACK_MODEL}")
-            else:
-                raise
-
-        # Poll for completion
-        result = await self._poll_until_complete(response_id)
+            result = await self._submit_and_poll(topic)
+        except ResearchRequestFailed as exc:
+            error_msg = str(exc)
+            if "rate limit" not in error_msg.lower():
+                raise  # Non-rate-limit failure: propagate immediately without retry
+            delay = _parse_rate_limit_delay(error_msg)
+            logger.warning(
+                "Rate-limit failure on first attempt; retrying in %.2fs. Error: %s",
+                delay, error_msg,
+            )
+            await asyncio.sleep(delay)
+            # Single retry — second failure propagates as-is
+            result = await self._submit_and_poll(topic)
 
         # Extract report and citations
         report = self._extract_report(result)
         citations = self._extract_citations(result)
 
         return ResearchResponse(content=report, citations=citations)
+
+    async def _submit_and_poll(self, topic: str) -> dict:
+        """Submit a new request and poll until complete.
+
+        Handles 404 fallback: tries the primary model first, falls back to
+        FALLBACK_MODEL on 404 (same logic as the original research() method).
+        Extracted so the retry path in research() can resubmit cleanly.
+        """
+        # Try primary model first, fallback to o4-mini on 404
+        try:
+            response_id = await self._submit_request(topic, self._primary_model)
+            logger.info(
+                "Submitted deep research request %s with %s", response_id, self._primary_model
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning(
+                    "%s not available, falling back to %s",
+                    self._primary_model, FALLBACK_MODEL,
+                )
+                response_id = await self._submit_request(topic, FALLBACK_MODEL)
+                logger.info(
+                    "Submitted deep research request %s with %s", response_id, FALLBACK_MODEL
+                )
+            else:
+                raise
+
+        return await self._poll_until_complete(response_id)
 
     async def _submit_request(self, topic: str, model: str) -> str:
         """Submit background research request and return response ID."""
@@ -122,7 +211,12 @@ class OpenAIDeepResearchProvider:
             return data["id"]
 
     async def _poll_until_complete(self, response_id: str) -> dict:
-        """Poll the response endpoint until research is complete."""
+        """Poll the response endpoint until research is complete.
+
+        Emits ProviderPolling on the first attempt and every _POLL_EMIT_EVERY_N
+        attempts thereafter (DEC-RESEARCH-015). This throttling keeps the event log
+        readable without flooding it — at 10s intervals, events arrive ~once per minute.
+        """
         async with httpx.AsyncClient() as client:
             for attempt in range(MAX_POLL_ATTEMPTS):
                 response = await client.get(
@@ -135,6 +229,15 @@ class OpenAIDeepResearchProvider:
 
                 status = data.get("status", "")
                 logger.debug(f"Poll attempt {attempt + 1}/{MAX_POLL_ATTEMPTS}: status={status}")
+
+                # Emit liveness event on first attempt and every Nth thereafter.
+                if attempt % _POLL_EMIT_EVERY_N == 0:
+                    await self._events.emit(ProviderPolling(
+                        name="openai_deep",
+                        attempt=attempt + 1,
+                        max_attempts=MAX_POLL_ATTEMPTS,
+                        status=status,
+                    ))
 
                 if status == "completed":
                     return data

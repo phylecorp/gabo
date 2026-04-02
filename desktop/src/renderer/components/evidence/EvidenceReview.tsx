@@ -6,6 +6,16 @@
  *   or exclude items before analysis. Items are grouped by source type with visual badges
  *   for confidence, category, and verification status. Quick actions (Select All, Deselect
  *   All, High Confidence Only) enable efficient curation of large evidence pools.
+ *
+ * @decision DEC-DESKTOP-EVIDENCE-REVIEW-002
+ * @title EvidenceReview: inline "Add Item" form for manual evidence injection
+ * @status accepted
+ * @rationale Users need to supplement gathered evidence with their own knowledge during
+ *   the Gather & Review stage. The inline form reuses the same input patterns as the
+ *   edit form (textarea for claim, dropdowns for confidence/category). It is toggled by
+ *   an "Add Item" button in the actions bar. On save, onAddItem is called, the server
+ *   assigns an M-N ID and source='manual', and the context's ADD_ITEM reducer appends
+ *   the item to the pool. The form is cleared and closed on save or cancel.
  */
 import { useState } from 'react'
 import type { EvidencePool } from '../../api/types'
@@ -22,6 +32,7 @@ interface Props {
   onBack: () => void
   submitting: boolean
   onUpdateItem?: (itemId: string, updates: { claim?: string; confidence?: string; category?: string }) => void
+  onAddItem?: (data: { claim: string; confidence?: string; category?: string }) => void
 }
 
 export default function EvidenceReview({
@@ -36,13 +47,34 @@ export default function EvidenceReview({
   onBack,
   submitting,
   onUpdateItem,
+  onAddItem,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editClaim, setEditClaim] = useState('')
   const [editConfidence, setEditConfidence] = useState('')
   const [editCategory, setEditCategory] = useState('')
+  const [addingItem, setAddingItem] = useState(false)
+  const [addClaim, setAddClaim] = useState('')
+  const [addConfidence, setAddConfidence] = useState('Medium')
+  const [addCategory, setAddCategory] = useState('fact')
   const sourceCount = pool.sources?.length ?? 0
   const canSubmit = selectedCount > 0 && !submitting
+
+  function handleAddSave() {
+    if (!addClaim.trim()) return
+    onAddItem?.({ claim: addClaim.trim(), confidence: addConfidence, category: addCategory })
+    setAddClaim('')
+    setAddConfidence('Medium')
+    setAddCategory('fact')
+    setAddingItem(false)
+  }
+
+  function handleAddCancel() {
+    setAddClaim('')
+    setAddConfidence('Medium')
+    setAddCategory('fact')
+    setAddingItem(false)
+  }
 
   return (
     <div className="evidence-review">
@@ -97,7 +129,69 @@ export default function EvidenceReview({
         >
           Decomposition Only
         </button>
+        {onAddItem && (
+          <button
+            type="button"
+            className="evidence-action-btn"
+            onClick={() => setAddingItem(v => !v)}
+            disabled={submitting}
+            style={{ marginLeft: 'auto' }}
+          >
+            {addingItem ? 'Cancel Add' : '+ Add Item'}
+          </button>
+        )}
       </div>
+
+      {/* Inline add-item form */}
+      {addingItem && (
+        <div className="evidence-add-form" style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border)', background: 'rgba(152,152,176,0.05)' }}>
+          <textarea
+            className="evidence-edit-claim"
+            placeholder="Enter your evidence claim..."
+            value={addClaim}
+            onChange={e => setAddClaim(e.target.value)}
+            rows={3}
+            style={{ width: '100%', padding: '8px', fontFamily: 'inherit', fontSize: 'inherit', border: '1px solid var(--color-border)', borderRadius: '4px', resize: 'vertical', boxSizing: 'border-box' }}
+            autoFocus
+          />
+          <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center' }}>
+            <select
+              value={addConfidence}
+              onChange={e => setAddConfidence(e.target.value)}
+              style={{ padding: '4px 8px', border: '1px solid var(--color-border)', borderRadius: '4px' }}
+            >
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+            <select
+              value={addCategory}
+              onChange={e => setAddCategory(e.target.value)}
+              style={{ padding: '4px 8px', border: '1px solid var(--color-border)', borderRadius: '4px' }}
+            >
+              <option value="fact">fact</option>
+              <option value="analysis">analysis</option>
+              <option value="opinion">opinion</option>
+              <option value="projection">projection</option>
+            </select>
+            <button
+              type="button"
+              className="evidence-action-btn"
+              onClick={handleAddSave}
+              disabled={!addClaim.trim()}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="evidence-action-btn"
+              onClick={handleAddCancel}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Evidence item list */}
       <div className="evidence-items">

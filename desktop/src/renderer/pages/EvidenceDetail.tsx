@@ -149,6 +149,9 @@ export default function EvidenceDetail() {
           {gapCount > 0 && (
             <> &mdash; <strong>{gapCount}</strong> gap{gapCount !== 1 ? 's' : ''} identified</>
           )}
+          {pool.gap_resolution?.ran && (
+            <> &mdash; gap resolution: +<strong>{pool.gap_resolution.claims_added}</strong> claims, +<strong>{pool.gap_resolution.sources_added}</strong> sources</>
+          )}
         </span>
         {pool.provider_summary && (
           <span className="text-muted text-xs">{pool.provider_summary}</span>
@@ -203,6 +206,13 @@ export default function EvidenceDetail() {
                     {item.verified && (
                       <span className="evidence-badge evidence-badge-verified" title="Verified">
                         {'\u2713'} verified
+                      </span>
+                    )}
+
+                    {/* Gap fill badge: item was added by gap resolution */}
+                    {item.origin?.startsWith('gap_resolution') && (
+                      <span className="evidence-badge" style={{ background: 'rgba(34,197,94,0.1)', color: 'rgb(22,163,74)' }} title="Added by gap resolution">
+                        gap fill
                       </span>
                     )}
 
@@ -286,6 +296,32 @@ export default function EvidenceDetail() {
                 <li key={i}>{gap}</li>
               ))}
             </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Gap Resolution summary section */}
+      {pool.gap_resolution?.ran && (
+        <div className="run-detail-section">
+          <div className="run-detail-section-header">
+            <span className="run-detail-section-title">Gap Resolution</span>
+          </div>
+          <div style={{
+            padding: '12px 16px',
+            background: 'rgba(34,197,94,0.06)',
+            border: '1px solid rgba(34,197,94,0.15)',
+            borderRadius: 8,
+          }}>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 4 }}>
+              +{pool.gap_resolution.claims_added} claims, +{pool.gap_resolution.sources_added} sources from {pool.gap_resolution.queries_run} follow-up {pool.gap_resolution.queries_run === 1 ? 'query' : 'queries'}
+            </div>
+            {pool.gap_resolution.original_gaps.length > 0 && (
+              <ul style={{ margin: '4px 0 0', paddingLeft: 20, fontSize: 12, color: 'var(--color-text-muted)' }}>
+                {pool.gap_resolution.original_gaps.map((gap, i) => (
+                  <li key={i}>{gap}</li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       )}

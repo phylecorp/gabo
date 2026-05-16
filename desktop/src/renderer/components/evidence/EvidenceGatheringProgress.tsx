@@ -35,6 +35,7 @@ function eventLabel(event: PipelineEventMessage): string {
     case 'StageStarted':
       if (data.stage === 'decomposition') return 'Decomposing evidence...'
       if (data.stage === 'structuring') return 'Structuring claims...'
+      if (data.stage === 'gap_resolution') return 'Resolving information gaps...'
       break
     case 'EvidenceGatheringCompleted':
       return `Complete — ${data.item_count} items from ${data.source_count} sources`

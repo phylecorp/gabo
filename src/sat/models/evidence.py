@@ -7,6 +7,17 @@
 raw user text) need a common shape for the curation UI. EvidenceItem normalizes them with a
 source-type prefix (D- for decomposition, R- for research, U- for user) and adds a `selected`
 field for curation. EvidencePool collects items with session metadata.
+
+@decision DEC-EVIDENCE-005
+@title GapResolutionSummary and EvidenceItem.origin expose gap resolution to the UI
+@status accepted
+@rationale The backend gap resolver tags claims with origin="gap_resolution_query_N" and
+merges new sources, but this information was discarded before reaching the frontend. Two
+additions make it visible: (1) EvidenceItem.origin propagates the tag from ResearchClaim to
+EvidenceItem so the curation UI can display a "gap fill" badge; (2) GapResolutionSummary on
+EvidencePool carries the before/after delta (queries_run, claims_added, sources_added) so the
+UI can render a summary section. Both fields are optional with None defaults for full backward
+compatibility with existing persisted evidence.json files.
 """
 
 from __future__ import annotations
@@ -38,6 +49,28 @@ class EvidenceItem(BaseModel):
         default_factory=list,
         description="URLs of sources backing this evidence item, for syndication detection",
     )
+    origin: str | None = Field(
+        default=None,
+        description="Pipeline stage origin, e.g. 'gap_resolution_query_1'",
+    )
+
+
+class GapResolutionSummary(BaseModel):
+    """Summary of gap resolution results for UI display.
+
+    Attached to EvidencePool.gap_resolution after gather_evidence() runs gap
+    resolution. The before/after delta (claims_added, sources_added) lets the
+    UI show how much new evidence gap resolution contributed.
+    """
+
+    ran: bool = Field(description="Whether gap resolution executed")
+    original_gaps: list[str] = Field(
+        default_factory=list,
+        description="Gaps identified before resolution (resolver clears them from result)",
+    )
+    queries_run: int = Field(default=0, description="Number of follow-up queries executed")
+    claims_added: int = Field(default=0, description="New claims from gap resolution")
+    sources_added: int = Field(default=0, description="New sources from gap resolution")
 
 
 class EvidencePool(BaseModel):
@@ -51,6 +84,10 @@ class EvidencePool(BaseModel):
     provider_summary: str = Field(default="", description="Summary of providers queried")
     status: str = Field(default="gathering", description="gathering, ready, failed")
     error: str | None = Field(default=None)
+    gap_resolution: GapResolutionSummary | None = Field(
+        default=None,
+        description="Gap resolution results if ran; None when disabled or not yet run",
+    )
 
 
 @dataclass

@@ -275,6 +275,7 @@ export default function NewAnalysis() {
         provider: effectiveProvider || undefined,
         model: effectiveModel,
         evidence_sources: sources.length > 0 ? sources : undefined,
+        gap_resolution_enabled: gapResolutionEnabled,
       })
       setStep('gathering')
     } catch (err: unknown) {

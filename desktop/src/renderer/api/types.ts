@@ -17,6 +17,12 @@ export interface TechniqueInfo {
   category: 'diagnostic' | 'contrarian' | 'imaginative'
   description: string
   order: number
+  default_temperature: number | null
+}
+
+export interface TechniqueOverride {
+  model?: string | null
+  temperature?: number | null
 }
 
 export interface ProviderInfo {
@@ -212,8 +218,20 @@ export interface ProviderSettings {
   research_model?: string
 }
 
+export interface AdversarialSettings {
+  enabled?: boolean | null
+  mode?: string | null
+  rounds?: number | null
+  challenger_provider?: string | null
+  challenger_model?: string | null
+  investigator_provider?: string | null
+  investigator_model?: string | null
+}
+
 export interface AppSettings {
   providers: Record<string, ProviderSettings>
+  technique_overrides?: Record<string, TechniqueOverride>
+  adversarial?: AdversarialSettings | null
 }
 
 export interface ProviderSettingsResponse {
@@ -245,6 +263,8 @@ export interface ModelsResponse {
 
 export interface SettingsResponse {
   providers: Record<string, ProviderSettingsResponse>
+  technique_overrides?: Record<string, TechniqueOverride>
+  adversarial?: AdversarialSettings | null
 }
 
 export interface TestProviderRequest {
@@ -272,6 +292,16 @@ export interface EvidenceItem {
   verified: boolean
   selected: boolean
   provider_name: string | null
+  origin?: string | null
+  source_urls?: string[]
+}
+
+export interface GapResolutionSummary {
+  ran: boolean
+  original_gaps: string[]
+  queries_run: number
+  claims_added: number
+  sources_added: number
 }
 
 export interface EvidencePool {
@@ -283,6 +313,7 @@ export interface EvidencePool {
   provider_summary: string
   status: 'gathering' | 'ready' | 'failed'
   error: string | null
+  gap_resolution?: GapResolutionSummary | null
 }
 
 export interface EvidenceGatherRequest {
@@ -294,6 +325,7 @@ export interface EvidenceGatherRequest {
   provider?: string
   model?: string | null
   evidence_sources?: string[]
+  gap_resolution_enabled?: boolean
 }
 
 export interface EvidenceGatherResponse {
@@ -395,5 +427,11 @@ export interface TemplateInfo {
 export interface TemplateUploadResponse {
   filename: string
   size: number
+  status: string
+}
+
+// Writing Style — mirrors Python StyleTextResponse
+export interface StyleTextResponse {
+  content: string
   status: string
 }

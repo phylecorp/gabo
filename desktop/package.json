@@ -13,7 +13,7 @@
     "build:sidecar:win": "pyinstaller ../desktop/sat-api.spec --distpath pyinstaller/dist --workpath pyinstaller/build",
     "build:mac": "npm run build && electron-builder --mac",
     "build:mac:dir": "npm run build && electron-builder --mac --dir",
-    "dist:mac": "npm run build:sidecar:mac && npm run build && electron-builder --mac",
+    "dist:mac": "npm run build:sidecar:mac && npm run build && electron-builder --mac && codesign --force --deep --sign - dist/mac-arm64/Gabo.app",
     "dist:win": "npm run build:sidecar:win && npm run build && electron-builder --win",
     "audit": "npm audit --audit-level=moderate"
   },

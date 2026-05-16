@@ -113,6 +113,7 @@ class Technique(ABC):
         self,
         ctx: TechniqueContext,
         provider: LLMProvider,
+        temperature_override: float | None = None,
     ) -> ArtifactResult:
         """Run this technique: build prompt, call LLM, post-process.
 
@@ -123,6 +124,14 @@ class Technique(ABC):
         filenames and registry lookups always use the canonical registry ID
         (e.g. "assumptions") rather than whatever the LLM may have generated
         (e.g. "KAC-001"). See @decision DEC-TECH-002.
+
+        Args:
+            ctx: Technique input context (question, evidence, prior results).
+            provider: LLM provider to call.
+            temperature_override: Optional temperature from per-technique config.
+                Resolution order: override > technique class property > omit (use
+                provider default). Note: 0.0 is a valid override, not treated as
+                falsy. See @decision DEC-TECH-OVERRIDE-001.
         """
         system_prompt, messages = self.build_prompt(ctx)
         kwargs: dict = {
@@ -132,8 +141,11 @@ class Technique(ABC):
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
-        if self.temperature is not None:
-            kwargs["temperature"] = self.temperature
+        # Resolution: config override > technique class property > provider default
+        # Use `is not None` to correctly handle temperature_override=0.0 (falsy).
+        effective_temp = temperature_override if temperature_override is not None else self.temperature
+        if effective_temp is not None:
+            kwargs["temperature"] = effective_temp
         result = await provider.generate_structured(**kwargs)
         result = self.post_process(result)
         # Framework controls identity — not the LLM.

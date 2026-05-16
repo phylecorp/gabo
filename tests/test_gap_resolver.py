@@ -499,6 +499,181 @@ class TestMultiResearchAdapterUnit:
         assert len(response.citations) == 1
 
 
+class TestQueryTimeout:
+    """Tests for per-query timeout in resolve_gaps."""
+
+    @pytest.mark.asyncio
+    async def test_slow_provider_times_out_gracefully(self):
+        """A provider that sleeps longer than query_timeout is cancelled gracefully.
+
+        The timeout fires, the query returns empty results, and no exception
+        propagates. The original claims are preserved unchanged.
+        """
+        import asyncio
+
+        result = _make_result(claims=["Original Claim"], gaps=["What about B?"])
+
+        class MockLLM:
+            async def generate_structured(self, output_schema, **kwargs):
+                if output_schema is GapQueries:
+                    return GapQueries(queries=["follow-up query"])
+                raise AssertionError("Structurer should not be called for timed-out provider")
+
+        class SlowProvider:
+            async def research(self, **kwargs):
+                # Sleep much longer than the 0.05s test timeout
+                await asyncio.sleep(10)
+                return None  # Should never reach here
+
+        # query_timeout=0.05 (50 ms) — much shorter than 10s sleep
+        resolved = await resolve_gaps(
+            result, SlowProvider(), MockLLM(), max_iterations=2, query_timeout=0.05
+        )
+
+        # Original claim preserved; no new claims from timed-out query
+        claim_texts = [c.claim for c in resolved.claims]
+        assert "Original Claim" in claim_texts
+        assert len(resolved.claims) == 1  # No new claims added
+
+    @pytest.mark.asyncio
+    async def test_timeout_emits_stage_completed(self):
+        """A timed-out query still emits StageCompleted so the frontend timer stops."""
+        import asyncio
+
+        from sat.events import StageCompleted
+
+        result = _make_result(claims=["Claim A"], gaps=["Need B"])
+        completed_events: list[StageCompleted] = []
+
+        class CapturingBus:
+            async def emit(self, event):
+                if isinstance(event, StageCompleted):
+                    completed_events.append(event)
+
+        class MockLLM:
+            async def generate_structured(self, output_schema, **kwargs):
+                if output_schema is GapQueries:
+                    return GapQueries(queries=["follow-up query"])
+                raise AssertionError("Should not reach structurer")
+
+        class SlowProvider:
+            async def research(self, **kwargs):
+                await asyncio.sleep(10)
+
+        await resolve_gaps(
+            result,
+            SlowProvider(),
+            MockLLM(),
+            max_iterations=2,
+            query_timeout=0.05,
+            events=CapturingBus(),
+        )
+
+        # StageCompleted must be emitted even for timed-out queries
+        assert len(completed_events) == 1
+        assert completed_events[0].technique_id == "query-1"
+
+    @pytest.mark.asyncio
+    async def test_fast_query_succeeds_within_timeout(self):
+        """A query that completes before timeout proceeds normally."""
+        from sat.research.base import ResearchResponse
+
+        result = _make_result(claims=["Claim A"], gaps=["Need B"])
+        follow_up = _make_result(claims=["Claim B"], gaps=[])
+
+        class MockLLM:
+            async def generate_structured(self, output_schema, **kwargs):
+                if output_schema is GapQueries:
+                    return GapQueries(queries=["quick query"])
+                return follow_up
+
+        class FastProvider:
+            async def research(self, **kwargs):
+                return ResearchResponse(content="Quick research about B")
+
+        # 5-second timeout — fast provider should finish well within this
+        resolved = await resolve_gaps(
+            result, FastProvider(), MockLLM(), max_iterations=2, query_timeout=5.0
+        )
+
+        claim_texts = [c.claim for c in resolved.claims]
+        assert "Claim A" in claim_texts
+        assert "Claim B" in claim_texts
+
+    def test_query_timeout_config_default(self):
+        """GapResolutionConfig has query_timeout=300.0 by default."""
+        from sat.config import GapResolutionConfig
+
+        cfg = GapResolutionConfig()
+        assert cfg.query_timeout == 300.0
+
+
+class TestAlwaysEmitsStageCompleted:
+    """Tests that StageCompleted is always emitted, regardless of error state."""
+
+    @pytest.mark.asyncio
+    async def test_failed_provider_still_emits_stage_completed(self):
+        """A provider failure still emits StageCompleted so the frontend timer stops."""
+        from sat.events import StageCompleted
+
+        result = _make_result(claims=["A"], gaps=["Gap 1"])
+        completed_events: list[StageCompleted] = []
+
+        class CapturingBus:
+            async def emit(self, event):
+                if isinstance(event, StageCompleted):
+                    completed_events.append(event)
+
+        class MockLLM:
+            async def generate_structured(self, output_schema, **kwargs):
+                if output_schema is GapQueries:
+                    return GapQueries(queries=["follow-up"])
+                raise AssertionError("Unreachable")
+
+        class FailProvider:
+            async def research(self, **kwargs):
+                raise RuntimeError("Provider down")
+
+        await resolve_gaps(
+            result, FailProvider(), MockLLM(), max_iterations=2, events=CapturingBus()
+        )
+
+        assert len(completed_events) == 1
+        assert completed_events[0].technique_id == "query-1"
+
+    @pytest.mark.asyncio
+    async def test_successful_query_emits_stage_completed(self):
+        """Successful query emits StageCompleted (regression guard for always-emit)."""
+        from sat.events import StageCompleted
+        from sat.research.base import ResearchResponse
+
+        result = _make_result(claims=["A"], gaps=["Gap 1"])
+        completed_events: list[StageCompleted] = []
+        follow_up = _make_result(claims=["B"], gaps=[])
+
+        class CapturingBus:
+            async def emit(self, event):
+                if isinstance(event, StageCompleted):
+                    completed_events.append(event)
+
+        class MockLLM:
+            async def generate_structured(self, output_schema, **kwargs):
+                if output_schema is GapQueries:
+                    return GapQueries(queries=["follow-up"])
+                return follow_up
+
+        class FastProvider:
+            async def research(self, **kwargs):
+                return ResearchResponse(content="Some content about B")
+
+        await resolve_gaps(
+            result, FastProvider(), MockLLM(), max_iterations=2, events=CapturingBus()
+        )
+
+        assert len(completed_events) == 1
+        assert completed_events[0].technique_id == "query-1"
+
+
 class TestConfigDefaults:
     """Tests that config defaults match the bumped values."""
 

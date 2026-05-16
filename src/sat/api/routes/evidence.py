@@ -59,6 +59,7 @@ from sat.api.run_manager import ActiveRun, RunManager
 from sat.config import (
     AnalysisConfig,
     DecompositionConfig,
+    GapResolutionConfig,
     ProviderConfig,
     ReportConfig,
     ResearchConfig,
@@ -149,6 +150,7 @@ def create_evidence_router(
         research_cfg = ResearchConfig(
             enabled=request.research_enabled,
             mode=request.research_mode,
+            gap_resolution=GapResolutionConfig(enabled=request.gap_resolution_enabled),
         )
         decomposition_cfg = DecompositionConfig(
             enabled=True,  # always attempt decomposition if evidence is provided

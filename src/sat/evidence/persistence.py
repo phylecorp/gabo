@@ -188,6 +188,7 @@ def _load_research_artifact(
             verified=claim.verified,
             selected=True,
             provider_name=result.research_provider,
+            origin=getattr(claim, "origin", None),
         )
         items.append(item)
 

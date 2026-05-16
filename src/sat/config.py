@@ -117,6 +117,54 @@ PROVIDER_API_KEY_ENVS = {
 }
 
 
+def _get_style_guide_path() -> Path:
+    """Return path to ~/.sat/style_guide.md.
+
+    Overrideable in tests by monkey-patching this function on the module.
+    """
+    return Path.home() / ".sat" / "style_guide.md"
+
+
+def _get_exemplar_path() -> Path:
+    """Return path to ~/.sat/exemplar.md.
+
+    Overrideable in tests by monkey-patching this function on the module.
+    """
+    return Path.home() / ".sat" / "exemplar.md"
+
+
+def load_style_guide() -> str | None:
+    """Read ~/.sat/style_guide.md if present, return contents or None.
+
+    Returns None if the file does not exist, cannot be read, or is blank.
+    The path is resolved via _get_style_guide_path() so tests can redirect it.
+    """
+    path = _get_style_guide_path()
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+        return text if text else None
+    except OSError:
+        return None
+
+
+def load_exemplar() -> str | None:
+    """Read ~/.sat/exemplar.md if present, return contents or None.
+
+    Returns None if the file does not exist, cannot be read, or is blank.
+    The path is resolved via _get_exemplar_path() so tests can redirect it.
+    """
+    path = _get_exemplar_path()
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+        return text if text else None
+    except OSError:
+        return None
+
+
 def get_default_runs_dir() -> Path:
     """Return the stable directory for analysis run output.
 
@@ -179,6 +227,97 @@ def _load_config_file_model(provider: str) -> str | None:
         return model if model else None
     except (json.JSONDecodeError, OSError):
         return None
+
+
+class TechniqueOverride(BaseModel):
+    """Per-technique configuration override (model and/or temperature).
+
+    @decision DEC-TECH-OVERRIDE-001
+    @title Per-technique model and temperature overrides from ~/.sat/config.json
+    @status accepted
+    @rationale Analysts may want different models or temperatures for specific techniques
+      without changing the global provider config. For example, use claude-opus for creative
+      techniques but gpt-4o for analytical ones. Stored under the technique_overrides key
+      in ~/.sat/config.json as a dict keyed by technique ID. Both fields are optional so
+      users can override one without specifying the other. Temperature range 0.0-2.0
+      mirrors the OpenAI/Anthropic API constraint.
+    """
+
+    model: str | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+
+
+def load_technique_overrides() -> dict[str, TechniqueOverride]:
+    """Load per-technique overrides from ~/.sat/config.json technique_overrides key.
+
+    Returns empty dict if no overrides configured or on any error (missing file,
+    malformed JSON, OS error). This is intentionally defensive — a bad config
+    file must not break the pipeline.
+
+    The config path is resolved via _get_sat_config_path() so tests can redirect
+    it via monkeypatch without touching the real ~/.sat directory.
+    """
+    config_path = _get_sat_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        data = json.loads(config_path.read_text())
+        raw = data.get("technique_overrides", {})
+        return {
+            tid: TechniqueOverride.model_validate(cfg)
+            for tid, cfg in raw.items()
+            if isinstance(cfg, dict)
+        }
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+class AdversarialDefaults(BaseModel):
+    """Persistent adversarial analysis defaults from ~/.sat/config.json 'adversarial' key.
+
+    @decision DEC-ADV-DEFAULTS-001
+    @title AdversarialDefaults loaded from config file adversarial key
+    @status accepted
+    @rationale Persistent adversarial defaults let users configure their preferred
+      mode, rounds, and provider overrides once rather than repeating CLI flags or
+      API parameters. The defaults are layered under the existing adversarial config
+      build logic — explicit call arguments always win. All fields are Optional so
+      a partial config or missing config file gracefully produces empty defaults.
+    """
+
+    enabled: bool | None = None
+    mode: str | None = None
+    rounds: int | None = Field(default=None, ge=1, le=5)
+    challenger_provider: str | None = None
+    challenger_model: str | None = None
+    investigator_provider: str | None = None
+    investigator_model: str | None = None
+
+
+def load_adversarial_defaults() -> AdversarialDefaults:
+    """Load adversarial defaults from ~/.sat/config.json 'adversarial' key.
+
+    Returns empty AdversarialDefaults (all fields None) if:
+    - The config file does not exist
+    - The file is malformed JSON
+    - The 'adversarial' key is missing or not a dict
+    - Any OS or parse error occurs
+
+    This is intentionally defensive — a bad config file must not break the
+    pipeline. The config path is resolved via _get_sat_config_path() so tests
+    can redirect it via monkeypatch without touching the real ~/.sat directory.
+    """
+    config_path = _get_sat_config_path()
+    if not config_path.exists():
+        return AdversarialDefaults()
+    try:
+        data = json.loads(config_path.read_text())
+        raw = data.get("adversarial", {})
+        if not isinstance(raw, dict):
+            return AdversarialDefaults()
+        return AdversarialDefaults.model_validate(raw)
+    except (json.JSONDecodeError, OSError, Exception):
+        return AdversarialDefaults()
 
 
 def _load_config_file_research_model(provider: str) -> str | None:
@@ -358,6 +497,13 @@ class GapResolutionConfig(BaseModel):
     max_sources_per_iteration: int = Field(
         default=10, description="Max sources per follow-up query"
     )
+    query_timeout: float = Field(
+        default=300.0,
+        description=(
+            "Per-query timeout in seconds for gap resolution follow-up queries (default 5 min). "
+            "Gap queries are lightweight supplements, not deep research — 300s is generous."
+        ),
+    )
 
 
 class ResearchConfig(BaseModel):
@@ -432,7 +578,7 @@ class AnalysisConfig(BaseModel):
     techniques: list[str] | None = Field(
         default=None, description="Technique IDs to use (auto-select if None)"
     )
-    output_dir: Path = Field(default=Path("."))
+    output_dir: Path | None = Field(default=None, description="Output directory (None = ~/.sat/runs/)")
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
     preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
@@ -459,6 +605,17 @@ __all__ = [
     "VerificationConfig",
     "IngestionConfig",
     "DecompositionConfig",
+    # Per-technique model/temperature overrides (DEC-TECH-OVERRIDE-001)
+    "TechniqueOverride",
+    "load_technique_overrides",
+    # Adversarial persistent defaults (DEC-ADV-DEFAULTS-001)
+    "AdversarialDefaults",
+    "load_adversarial_defaults",
+    # Style guide and exemplar loaders
+    "load_style_guide",
+    "load_exemplar",
+    "_get_style_guide_path",
+    "_get_exemplar_path",
     # Research model resolution (DEC-CFG-004)
     "DEFAULT_RESEARCH_MODELS",
     "resolve_research_model",

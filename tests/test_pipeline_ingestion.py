@@ -260,7 +260,7 @@ def _make_mock_technique():
     class _MockTechnique:
         metadata = meta
 
-        async def execute(self, ctx, provider):
+        async def execute(self, ctx, provider, temperature_override=None):
             return ArtifactResult(
                 technique_id="key_assumptions",
                 technique_name="Key Assumptions Check",

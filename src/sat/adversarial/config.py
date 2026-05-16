@@ -16,7 +16,12 @@ is optional in RoleAssignment so dual mode configs remain valid without changes.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from sat.config import AdversarialDefaults
 
 
 class ProviderRef(BaseModel):
@@ -66,6 +71,7 @@ def build_adversarial_config(
     mode: str | object = _AUTO_MODE,
     rounds: int = 1,
     api_key: str | None = None,
+    defaults: "AdversarialDefaults | None" = None,
 ) -> AdversarialConfig:
     """Build a fully-populated AdversarialConfig with provider resolution.
 
@@ -98,16 +104,33 @@ def build_adversarial_config(
     (allow auto-upgrade to trident) from "caller explicitly passed 'dual'"
     (suppress auto-upgrade), without requiring a separate parameter.
     """
-    from sat.config import ProviderConfig, resolve_challenger_provider, resolve_investigator_provider
+    from sat.config import (
+        ProviderConfig,
+        load_adversarial_defaults,
+        resolve_challenger_provider,
+        resolve_investigator_provider,
+    )
+
+    # Load persistent defaults from config file when not provided by caller.
+    # Explicit call arguments always win over defaults (see DEC-ADV-DEFAULTS-001).
+    if defaults is None:
+        defaults = load_adversarial_defaults()
 
     resolved_model = model or ProviderConfig(provider=provider).resolve_model()
 
-    challenger_info = resolve_challenger_provider(provider)
-    if challenger_info:
-        chall_provider, chall_model = challenger_info
+    # Challenger resolution: defaults override auto-resolution when set.
+    if defaults.challenger_provider:
+        chall_provider = defaults.challenger_provider
+        chall_model = defaults.challenger_model or ProviderConfig(
+            provider=defaults.challenger_provider
+        ).resolve_model()
     else:
-        # No other provider available — self-critique fallback
-        chall_provider, chall_model = provider, resolved_model
+        challenger_info = resolve_challenger_provider(provider)
+        if challenger_info:
+            chall_provider, chall_model = challenger_info
+        else:
+            # No other provider available — self-critique fallback
+            chall_provider, chall_model = provider, resolved_model
 
     providers_dict: dict[str, ProviderRef] = {
         "primary": ProviderRef(provider=provider, model=resolved_model, api_key=api_key),
@@ -115,30 +138,46 @@ def build_adversarial_config(
     }
     role_kwargs: dict[str, str] = {"primary": "primary", "challenger": "challenger"}
 
-    # Resolve the effective mode string (sentinel → "dual" as starting point)
-    caller_specified = mode is not _AUTO_MODE
-    effective_mode = "dual" if mode is _AUTO_MODE else str(mode)
+    # Mode resolution: explicit caller arg > defaults.mode > auto-detect
+    if mode is not _AUTO_MODE:
+        caller_specified = True
+        effective_mode = str(mode)
+    elif defaults.mode:
+        caller_specified = True
+        effective_mode = defaults.mode
+    else:
+        caller_specified = False
+        effective_mode = "dual"
 
-    if effective_mode == "trident":
-        # Explicit trident requested — resolve investigator if available
-        inv_info = resolve_investigator_provider(provider, chall_provider)
-        if inv_info:
-            inv_prov, inv_model = inv_info
+    # Rounds resolution: defaults.rounds applies only when caller used the sentinel default (1).
+    effective_rounds = rounds
+    if rounds == 1 and defaults.rounds is not None:
+        effective_rounds = defaults.rounds
+
+    # Investigator resolution: defaults override auto-resolution when set.
+    if effective_mode == "trident" or not caller_specified:
+        if defaults.investigator_provider:
+            inv_prov = defaults.investigator_provider
+            inv_model = defaults.investigator_model or ProviderConfig(
+                provider=defaults.investigator_provider
+            ).resolve_model()
             providers_dict["investigator"] = ProviderRef(provider=inv_prov, model=inv_model)
             role_kwargs["investigator"] = "investigator"
-    elif not caller_specified:
-        # Auto-detect trident only when the caller did not explicitly choose a mode
-        inv_info = resolve_investigator_provider(provider, chall_provider)
-        if inv_info:
-            inv_prov, inv_model = inv_info
-            providers_dict["investigator"] = ProviderRef(provider=inv_prov, model=inv_model)
-            role_kwargs["investigator"] = "investigator"
-            effective_mode = "trident"
+            if not caller_specified:
+                effective_mode = "trident"
+        else:
+            inv_info = resolve_investigator_provider(provider, chall_provider)
+            if inv_info:
+                inv_prov, inv_model = inv_info
+                providers_dict["investigator"] = ProviderRef(provider=inv_prov, model=inv_model)
+                role_kwargs["investigator"] = "investigator"
+                if not caller_specified:
+                    effective_mode = "trident"
     # else: caller explicitly passed "dual" — keep dual, skip investigator resolution
 
     return AdversarialConfig(
         enabled=True,
-        rounds=rounds,
+        rounds=effective_rounds,
         providers=providers_dict,
         roles=RoleAssignment(**role_kwargs),
         mode=effective_mode,

@@ -63,6 +63,28 @@ class AnalysisRequest(BaseModel):
     gap_resolution_enabled: bool = True
 
 
+class TaskRequest(BaseModel):
+    """Request body for POST /api/task — template-driven analysis."""
+
+    task_type: Annotated[str, Field(max_length=50)]
+    """Preset task type ID: threat, brief, bda, annex_b, annex_l."""
+
+    question: _Question
+    """The analytic question to investigate."""
+
+    evidence: _Evidence = None
+    """Optional evidence text."""
+
+    research: bool = False
+    """Enable deep research to fill evidence gaps."""
+
+    provider: str = "anthropic"
+    """LLM provider for both planning and analysis."""
+
+    model: str | None = None
+    """Model identifier (default: provider default)."""
+
+
 class AnalysisResponse(BaseModel):
     """Response for a successfully started analysis run."""
 
@@ -94,6 +116,7 @@ class TechniqueInfo(BaseModel):
     category: str
     description: str
     order: int
+    default_temperature: float | None = None
 
 
 class ProviderInfo(BaseModel):
@@ -143,10 +166,47 @@ class ProviderSettings(BaseModel):
     research_model: str = ""
 
 
+class TechniqueOverrideSettings(BaseModel):
+    """Per-technique model and temperature override (API layer).
+
+    @decision DEC-TECH-OVERRIDE-API-001
+    @title API-layer technique override model is separate from config.py TechniqueOverride
+    @status accepted
+    @rationale TechniqueOverrideSettings and sat.config.TechniqueOverride have the same
+      fields by design but are kept separate. The API model belongs to the HTTP boundary
+      and can evolve independently (e.g. add display hints, validation messages). The
+      config model owns the persistence contract. Keeping them separate prevents accidental
+      coupling between storage format and HTTP API surface.
+    """
+
+    model: str | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+
+
+class AdversarialSettings(BaseModel):
+    """Persistent adversarial analysis defaults.
+
+    Stored under the 'adversarial' key in ~/.sat/config.json. All fields are
+    optional — only the fields the user explicitly configures are stored. These
+    values are picked up by build_adversarial_config() via load_adversarial_defaults()
+    and applied as defaults unless the caller (frontend/CLI) overrides them.
+    """
+
+    enabled: bool | None = None
+    mode: str | None = None
+    rounds: int | None = Field(default=None, ge=1, le=5)
+    challenger_provider: str | None = None
+    challenger_model: str | None = None
+    investigator_provider: str | None = None
+    investigator_model: str | None = None
+
+
 class AppSettings(BaseModel):
     """Application settings (provider API keys and models)."""
 
     providers: dict[str, ProviderSettings] = {}
+    technique_overrides: dict[str, TechniqueOverrideSettings] = {}
+    adversarial: AdversarialSettings | None = None
 
 
 class ProviderSettingsResponse(BaseModel):
@@ -163,6 +223,8 @@ class SettingsResponse(BaseModel):
     """Full settings response."""
 
     providers: dict[str, ProviderSettingsResponse] = {}
+    technique_overrides: dict[str, TechniqueOverrideSettings] = {}
+    adversarial: AdversarialSettings | None = None
 
 
 class TestProviderRequest(BaseModel):
@@ -192,6 +254,7 @@ class EvidenceGatherRequest(BaseModel):
     provider: str = "anthropic"
     model: str | None = None
     evidence_sources: _EvidenceSources = None
+    gap_resolution_enabled: bool = True
 
 
 class EvidenceGatherResponse(BaseModel):
@@ -285,3 +348,16 @@ class TemplateUploadResponse(BaseModel):
     filename: str
     size: int
     status: str
+
+
+class StyleTextRequest(BaseModel):
+    """Request body for style guide or exemplar PUT endpoints."""
+
+    content: Annotated[str, Field(default="", max_length=50_000)]
+
+
+class StyleTextResponse(BaseModel):
+    """Response for style guide or exemplar endpoints."""
+
+    content: str = ""
+    status: str = "ok"

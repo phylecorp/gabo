@@ -46,7 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from sat.adversarial.config import AdversarialConfig, build_adversarial_config
 from sat.api.auth import verify_token
-from sat.api.models import AnalysisRequest, AnalysisResponse
+from sat.api.models import AnalysisRequest, AnalysisResponse, TaskRequest
 from sat.api.run_manager import ActiveRun, RunManager
 from sat.config import (
     AnalysisConfig,
@@ -267,6 +267,118 @@ def create_analysis_router(
                     "type": "run_failed",
                     "data": {
                         "error": "Analysis failed — check server logs for details",
+                        "run_id": run.run_id,
+                    },
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                await _broadcast(run, error_event)
+
+        manager.start_or_queue(run, execute)
+
+        return AnalysisResponse(
+            run_id=run.run_id,
+            ws_url=f"ws://localhost:{port}/ws/analysis/{run.run_id}",
+            queue_position=manager.queue_position(run.run_id),
+        )
+
+    # ------------------------------------------------------------------
+    # Task mode endpoints (DEC-TASK-005)
+    # ------------------------------------------------------------------
+
+    @router.get("/api/task/types")
+    async def list_task_types() -> list[dict]:
+        """List all available preset task types.
+
+        Returns a list of task type metadata (id, name, description, section count).
+        No authentication bypass — uses the same auth dependency as other routes.
+        """
+        from sat.tasks.presets import list_presets
+
+        return [
+            {
+                "id": preset.id,
+                "name": preset.name,
+                "description": preset.description,
+                "section_count": len(preset.sections),
+                "default_techniques": preset.default_techniques,
+            }
+            for preset in list_presets()
+        ]
+
+    @router.post("/api/task", response_model=AnalysisResponse)
+    async def start_task(request: TaskRequest) -> AnalysisResponse:
+        """Start a task-mode analysis run.
+
+        Loads the preset TaskType, runs the LLM planner to map sections to
+        techniques, then starts the analysis pipeline with the computed config.
+        Returns run_id and WebSocket URL immediately, same as POST /api/analysis.
+
+        @decision DEC-TASK-005
+        @title POST /api/task mirrors POST /api/analysis response contract
+        @status accepted
+        @rationale Task mode is a wrapper over the existing pipeline. The API
+        response contract (run_id + ws_url + queue_position) is identical to
+        the analysis endpoint so the frontend can use the same WebSocket observer
+        for both paths. The only difference is that the task endpoint runs the
+        planner first (inside the background task) to compute the technique list.
+        """
+        import sat.techniques  # noqa: F401 — trigger registration
+
+        from sat.config import ResearchConfig, ReportConfig
+        from sat.providers.registry import create_provider
+        from sat.tasks.planner import build_analysis_config, plan_task
+        from sat.tasks.presets import get_preset
+
+        # Validate task type exists
+        try:
+            preset = get_preset(request.task_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        effective_output_dir = str(get_default_runs_dir())
+        resolved_output_dir = _validate_output_dir(effective_output_dir)
+
+        provider_cfg = ProviderConfig(provider=request.provider, model=request.model)
+
+        # Build a placeholder AnalysisConfig for run creation (techniques filled by planner)
+        base_config = AnalysisConfig(
+            question=request.question,
+            evidence=request.evidence,
+            output_dir=resolved_output_dir,
+            provider=provider_cfg,
+            research=ResearchConfig(enabled=request.research),
+            report=ReportConfig(enabled=True, fmt="both"),
+        )
+
+        run = manager.create_run(base_config)
+
+        async def execute() -> None:
+            try:
+                # Run planner inside the background task to avoid blocking the request
+                llm_provider = create_provider(provider_cfg, rate_limiter)
+                plan = await plan_task(preset, request.question, request.evidence, llm_provider)
+                config = build_analysis_config(plan, base_config)
+                # Update the run's config so status events reflect actual techniques
+                run.config = config
+
+                output_path = await run_analysis(config, run.bus, rate_limiter)
+                run.output_dir = str(output_path)
+                run.status = "completed"
+
+                completion = {
+                    "type": "run_completed",
+                    "data": {"output_dir": str(output_path), "run_id": run.run_id},
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                await _broadcast(run, completion)
+            except Exception as e:
+                run.status = "failed"
+                logger.error("Task run %s failed: %s", run.run_id, str(e), exc_info=True)
+                run.error = "Task analysis failed — check server logs for details"
+                error_event = {
+                    "type": "run_failed",
+                    "data": {
+                        "error": "Task analysis failed — check server logs for details",
                         "run_id": run.run_id,
                     },
                     "timestamp": datetime.now(UTC).isoformat(),

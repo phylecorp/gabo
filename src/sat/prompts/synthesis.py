@@ -97,12 +97,20 @@ independent providers performed analysis), apply additional weighting:
 def build_prompt(ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
     """Build the Synthesis Report prompt.
 
+    Injects the user's style guide (if present) into the system prompt so the
+    bottom_line_assessment and any narrative fields match the user's preferred voice.
+    The exemplar is intentionally omitted here — synthesis produces structured JSON,
+    so voice matching applies only to narrative fields, not the full output shape.
+    See DEC-PROMPT-REPORT-003 in report.py for full rationale.
+
     Args:
         ctx: Technique context with question, evidence, and ALL prior results.
 
     Returns:
         Tuple of (system_prompt, messages).
     """
+    from sat.config import load_style_guide
+
     user_msg = build_user_message(
         question=ctx.question,
         evidence=ctx.evidence,
@@ -110,4 +118,15 @@ def build_prompt(ctx: TechniqueContext) -> tuple[str, list[LLMMessage]]:
         relevant_prior_ids=None,  # Synthesis uses ALL prior results
     )
 
-    return SYNTHESIS_SYSTEM_PROMPT, [LLMMessage(role="user", content=user_msg)]
+    system_prompt = SYNTHESIS_SYSTEM_PROMPT
+
+    style_guide = load_style_guide()
+    if style_guide:
+        system_prompt += (
+            "\n\n## User Style Guide\n\n"
+            "The following style guide was provided by the user. Apply it to "
+            "the bottom_line_assessment and any narrative fields.\n\n"
+            + style_guide
+        )
+
+    return system_prompt, [LLMMessage(role="user", content=user_msg)]

@@ -9,6 +9,8 @@ is appropriate per Sacred Practice #5. LLM backend uses an in-memory test double
 """
 # @mock-exempt: Mocking external HTTP APIs (Perplexity, Brave Search) at the
 # service boundary. This is the correct use of mocks per project conventions.
+# The timeout test (test_client_has_20_minute_timeout) uses NO mocks — it
+# instantiates the real PerplexityProvider and inspects the real client object.
 
 from __future__ import annotations
 
@@ -57,6 +59,32 @@ class TestPerplexityBackend:
         result = await provider.research("test query")
         assert result.content == "Research findings about AI"
         mock_client.chat.completions.create.assert_called_once()
+
+    def test_client_has_20_minute_timeout(self):
+        """Verify the AsyncOpenAI client is configured with a 20-minute timeout.
+
+        sonar-deep-research is a single blocking HTTP call that can take 5+ minutes.
+        The SDK default of 600s is too short and causes APIConnectionError('Connection error.')
+        when queries exceed it. This test guards against that regression.
+
+        Uses the real PerplexityProvider with a real AsyncOpenAI client — no mocks needed
+        because we are inspecting the client's configuration, not making API calls.
+        """
+        # @mock-exempt: no mocks used in this test — real client object inspected
+        with patch.dict("os.environ", {"PERPLEXITY_API_KEY": "test-key"}):
+            from sat.research.perplexity import PerplexityProvider
+
+            provider = PerplexityProvider()
+
+        # openai.AsyncOpenAI stores timeout as an httpx.Timeout object.
+        # The read component must be >= 1200.0 seconds (20 minutes).
+        timeout = provider._client.timeout
+        read_timeout = getattr(timeout, "read", timeout)
+        assert read_timeout == 1200.0, (
+            f"Perplexity client timeout must be 1200.0s (20 min), got {read_timeout!r}. "
+            "sonar-deep-research queries can take 5-10 min; insufficient timeout causes "
+            "APIConnectionError('Connection error.')."
+        )
 
 
 class TestBraveBackend:

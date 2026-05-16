@@ -23,7 +23,7 @@ from sat.events import (
     StageCompleted,
     StageStarted,
 )
-from sat.models.evidence import EvidenceItem, EvidencePool
+from sat.models.evidence import EvidenceItem, EvidencePool, GapResolutionSummary
 
 if TYPE_CHECKING:
     from sat.providers.base import LLMProvider
@@ -89,6 +89,7 @@ async def gather_evidence(
     research_sources: list[dict] = []
     research_gaps: list[str] = []
     provider_summary = ""
+    gap_resolution_summary: GapResolutionSummary | None = None
 
     # Build coroutines to run
     tasks = []
@@ -110,11 +111,12 @@ async def gather_evidence(
             elif label == "decomposition":
                 decomp_items = result  # type: ignore[assignment]
             elif label == "research":
-                items, sources, gaps, summary = result  # type: ignore[misc]
+                items, sources, gaps, summary, gap_sum = result  # type: ignore[misc]
                 research_items = items
                 research_sources = sources
                 research_gaps = gaps
                 provider_summary = summary
+                gap_resolution_summary = gap_sum
 
     # If evidence exists but decomposition is disabled, create user items from paragraphs
     user_items: list[EvidenceItem] = []
@@ -146,6 +148,7 @@ async def gather_evidence(
         gaps=research_gaps,
         provider_summary=provider_summary,
         status="ready",
+        gap_resolution=gap_resolution_summary,
     )
 
     await bus.emit(
@@ -200,13 +203,17 @@ async def _run_research(
     provider: "LLMProvider",
     config: ResearchConfig,
     bus: EventBus,
-) -> tuple[list[EvidenceItem], list[dict], list[str], str]:
+) -> tuple[list[EvidenceItem], list[dict], list[str], str, GapResolutionSummary | None]:
     """Run research and convert ResearchClaims to EvidenceItems with R- prefix.
 
+    Optionally runs gap resolution after research completes when
+    config.gap_resolution.enabled is True and gaps were identified.
+
     Returns:
-        (items, sources_dicts, gaps, provider_summary)
+        (items, sources_dicts, gaps, provider_summary, gap_summary)
     """
     research_result = None
+    research_prov = None  # used for single-mode gap resolution
 
     if config.mode == "multi":
         from sat.research.multi_runner import run_multi_research
@@ -234,6 +241,43 @@ async def _run_research(
             events=bus,
         )
 
+    # Gap resolution — runs after initial research, before building items
+    gap_summary: GapResolutionSummary | None = None
+    if config.gap_resolution.enabled and research_result.gaps_identified:
+        original_gaps = list(research_result.gaps_identified)
+        claims_before = len(research_result.claims)
+        sources_before = len(research_result.sources)
+        try:
+            from sat.research.gap_resolver import resolve_gaps
+
+            if config.mode == "multi":
+                from sat.research.multi_runner import MultiResearchAdapter
+
+                gap_prov = MultiResearchAdapter(
+                    llm_provider=provider,
+                    max_sources=config.gap_resolution.max_sources_per_iteration,
+                )
+            else:
+                gap_prov = research_prov  # already created above for single mode
+            research_result = await resolve_gaps(
+                research_result=research_result,
+                research_provider=gap_prov,
+                llm_provider=provider,
+                max_iterations=config.gap_resolution.max_iterations,
+                max_sources=config.gap_resolution.max_sources_per_iteration,
+                events=bus,
+                query_timeout=config.gap_resolution.query_timeout,
+            )
+            gap_summary = GapResolutionSummary(
+                ran=True,
+                original_gaps=original_gaps,
+                queries_run=min(len(original_gaps), config.gap_resolution.max_iterations),
+                claims_added=len(research_result.claims) - claims_before,
+                sources_added=len(research_result.sources) - sources_before,
+            )
+        except Exception:
+            logger.warning("Gap resolution failed during evidence gathering", exc_info=True)
+
     items = _build_items_from_research_result(research_result)
 
     # Convert sources to plain dicts
@@ -252,7 +296,7 @@ async def _run_research(
     if research_result.verification_status:
         provider_summary += f" ({research_result.verification_status})"
 
-    return items, sources_dicts, list(research_result.gaps_identified), provider_summary
+    return items, sources_dicts, list(research_result.gaps_identified), provider_summary, gap_summary
 
 
 def _split_to_user_items(evidence: str) -> list[EvidenceItem]:
@@ -373,6 +417,7 @@ def _build_items_from_research_result(research_result: object) -> list[EvidenceI
             selected=True,
             provider_name=provider,
             source_urls=source_urls,
+            origin=getattr(claim, "origin", None),
         )
         items.append(item)
 

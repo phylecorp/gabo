@@ -43,7 +43,13 @@ class PerplexityProvider:
         key = api_key or os.environ.get("PERPLEXITY_API_KEY")
         if not key:
             raise ValueError("No Perplexity API key. Set PERPLEXITY_API_KEY or pass api_key.")
-        self._client = openai.AsyncOpenAI(api_key=key, base_url="https://api.perplexity.ai")
+        self._client = openai.AsyncOpenAI(
+            api_key=key,
+            base_url="https://api.perplexity.ai",
+            timeout=1200.0,  # 20 minutes — sonar-deep-research is a single blocking call
+            # that can take 5-10 min. SDK default (600s) causes APIConnectionError.
+            # Matches the 1200.0s timeout used by all LLM providers (DEC-RESEARCH-003).
+        )
         # Resolution: explicit param > config file > env var > hardcoded default
         self._model = model or resolve_research_model("perplexity")
         # EventBus for liveness events (DEC-RESEARCH-015). NullBus when not provided.

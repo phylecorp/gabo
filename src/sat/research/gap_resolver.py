@@ -24,6 +24,18 @@ sub-linear latency scaling with gap count. Graceful degradation is preserved: fa
 individual query coroutines are swallowed and do not crash the pipeline. The final
 merge deduplicates across all concurrent results, so overlapping findings are handled
 identically to the prior sequential approach.
+
+@decision DEC-RESEARCH-015
+@title Per-query timeout prevents indefinite hangs during gap resolution
+@status accepted
+@rationale Deep research providers can poll for 20+ minutes or hang indefinitely.
+Without a timeout, asyncio.gather() waits forever, leaving the pipeline frozen and
+the frontend timer incrementing without bound. A wrapper coroutine (_resolve_with_timeout)
+wraps each _resolve_single_gap call in asyncio.wait_for(coro, timeout=query_timeout),
+catching TimeoutError and returning the standard ([], [], "timeout after Xs") error
+tuple. This reuses the existing graceful-degradation pattern. Default 300 s (5 min)
+is generous for lightweight follow-up queries. StageCompleted is always emitted
+regardless of error/timeout so the frontend timer stops cleanly.
 """
 
 from __future__ import annotations
@@ -117,6 +129,7 @@ async def resolve_gaps(
     max_iterations: int = 2,
     max_sources: int = 5,
     events: EventBus | None = None,
+    query_timeout: float = 300.0,
 ) -> ResearchResult:
     """Run parallel gap resolution on a research result.
 
@@ -132,6 +145,9 @@ async def resolve_gaps(
         max_iterations: Maximum number of parallel follow-up queries (default 2).
         max_sources: Max sources per follow-up query (default 5, smaller than initial).
         events: Optional event bus for progress.
+        query_timeout: Per-query timeout in seconds (default 300). Deep research providers
+            can hang indefinitely; this cap ensures all queries terminate and emit
+            StageCompleted so the frontend timer stops cleanly.
 
     Returns:
         Updated ResearchResult with merged findings from gap resolution.
@@ -174,23 +190,43 @@ async def resolve_gaps(
         "y" if len(queries) == 1 else "ies",
     )
 
+    async def _resolve_with_timeout(
+        q: str, i: int
+    ) -> tuple[list[ResearchClaim], list[ResearchSource], str | None]:
+        """Wrap _resolve_single_gap with a per-query timeout.
+
+        On TimeoutError, returns the standard ([], [], error_msg) tuple so the
+        caller treats a timed-out query identically to any other failure —
+        no crash, no hang, graceful degradation. The timeout bound ensures
+        asyncio.gather() always terminates even if a provider polls indefinitely.
+        """
+        try:
+            return await asyncio.wait_for(
+                _resolve_single_gap(
+                    query=q,
+                    current=current,
+                    research_provider=research_provider,
+                    llm_provider=llm_provider,
+                    max_sources=max_sources,
+                    query_index=i,
+                ),
+                timeout=query_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Gap follow-up query %d timed out after %.0fs — skipping",
+                i + 1,
+                query_timeout,
+            )
+            return [], [], f"timeout after {query_timeout:.0f}s"
+
     # Step 2: Emit start events and run all research + structuring concurrently.
     for i, query in enumerate(queries):
         await bus.emit(StageStarted(stage="gap_resolution", technique_id=f"query-{i + 1}"))
         logger.info("Gap follow-up query %d: %s", i + 1, query)
 
     results = await asyncio.gather(
-        *[
-            _resolve_single_gap(
-                query=q,
-                current=current,
-                research_provider=research_provider,
-                llm_provider=llm_provider,
-                max_sources=max_sources,
-                query_index=i,
-            )
-            for i, q in enumerate(queries)
-        ]
+        *[_resolve_with_timeout(q, i) for i, q in enumerate(queries)]
     )
 
     # Step 3: Merge all successful results.
@@ -204,8 +240,15 @@ async def resolve_gaps(
     seen_source_ids: set[str] = {s.id for s in current.sources}
 
     for i, (new_claims, new_sources, error) in enumerate(results):
-        if error is None:
-            await bus.emit(StageCompleted(stage="gap_resolution", technique_id=f"query-{i + 1}"))
+        # Always emit StageCompleted so the frontend timer stops — even on failure or timeout.
+        # The detail field records why (ok / error message / timeout after Xs).
+        await bus.emit(
+            StageCompleted(
+                stage="gap_resolution",
+                technique_id=f"query-{i + 1}",
+                detail=error or "ok",
+            )
+        )
 
         for claim in new_claims:
             key = claim.claim.strip().lower()

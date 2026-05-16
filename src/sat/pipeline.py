@@ -36,7 +36,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from sat.artifacts import ArtifactWriter
-from sat.config import AnalysisConfig
+from sat.config import AnalysisConfig, get_default_runs_dir
 from sat.errors import is_transient_error
 from sat.evidence.lineage import EvidenceLineage
 from sat.events import (
@@ -144,7 +144,8 @@ async def run_analysis(
     bus.subscribe(rich_handler)
 
     run_id = uuid.uuid4().hex[:12]
-    output_dir = config.output_dir / f"sat-{run_id}"
+    base_dir = config.output_dir if config.output_dir is not None else get_default_runs_dir()
+    output_dir = base_dir / f"sat-{run_id}"
 
     console.print(
         Panel(
@@ -381,6 +382,7 @@ async def run_analysis(
                         max_iterations=config.research.gap_resolution.max_iterations,
                         max_sources=config.research.gap_resolution.max_sources_per_iteration,
                         events=bus,
+                        query_timeout=config.research.gap_resolution.query_timeout,
                     )
                     console.print(
                         f"[green]Gap resolution:[/green] "
@@ -412,6 +414,7 @@ async def run_analysis(
                         confidence=claim.confidence,
                         verified=claim.verified,
                         selected=True,
+                        origin=getattr(claim, "origin", None),
                     )
                 )
             # Merge: if user evidence already exists, append research after it
@@ -540,6 +543,16 @@ async def run_analysis(
     prior_results: dict[str, ArtifactResult] = {}
     completed: list[str] = []
 
+    # @decision DEC-TECH-OVERRIDE-001
+    # @title Load per-technique overrides before technique execution loop
+    # @status accepted
+    # @rationale Loaded once before the loop for efficiency. The override dict is
+    # captured by the _run_technique closure and keyed by technique ID, so each
+    # technique sees its own override without any shared state mutation.
+    from sat.config import load_technique_overrides
+
+    technique_overrides = load_technique_overrides()
+
     from sat.techniques.registry import build_dependency_layers
 
     layers = build_dependency_layers(technique_ids)
@@ -556,6 +569,20 @@ async def run_analysis(
                 meta = technique.metadata
                 task = progress.add_task(f"Running {meta.name}...", total=None)
 
+                # Resolve per-technique overrides from ~/.sat/config.json.
+                # Model override requires a fresh provider (model is fixed at construction).
+                # Temperature override is passed through to execute() which resolves it
+                # against the technique class property. See DEC-TECH-OVERRIDE-001.
+                override = technique_overrides.get(tid)
+                if override and override.model:
+                    tech_provider = create_provider(
+                        config.provider.model_copy(update={"model": override.model}),
+                        rate_limiter,
+                    )
+                else:
+                    tech_provider = provider
+                temp_override = override.temperature if override else None
+
                 try:
                     ctx = TechniqueContext(
                         question=config.question,
@@ -564,7 +591,7 @@ async def run_analysis(
                     )
                     await bus.emit(StageStarted(stage="analysis", technique_id=tid))
                     try:
-                        result = await technique.execute(ctx, provider)
+                        result = await technique.execute(ctx, tech_provider, temperature_override=temp_override)
                     except Exception as first_exc:
                         if is_transient_error(first_exc):
                             logger.warning(
@@ -575,7 +602,7 @@ async def run_analysis(
                             progress.update(
                                 task, description=f"[yellow]Retrying:[/yellow] {meta.name}"
                             )
-                            result = await technique.execute(ctx, provider)
+                            result = await technique.execute(ctx, tech_provider, temperature_override=temp_override)
                         else:
                             raise
                     writer.write_result(result, evidence=config.evidence)

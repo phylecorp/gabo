@@ -30,11 +30,11 @@
  *   ModelSelect and <input> based on whether a non-empty model list arrived.
  *   Addresses REQ-P0-002 (model selection) and REQ-P1-002 (graceful degradation).
  */
-import { useState, useRef, type ChangeEvent } from 'react'
+import { useState, useRef, useEffect, type ChangeEvent } from 'react'
 import { useSettings, useUpdateSettings, useTestProvider } from '../hooks/useSettings'
 import { useModels } from '../hooks/useModels'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { ProviderSettingsResponse, TestProviderResponse, ModelInfo, TemplateInfo } from '../api/types'
+import type { ProviderSettingsResponse, TestProviderResponse, ModelInfo, TemplateInfo, StyleTextResponse, TechniqueInfo, TechniqueOverride, AdversarialSettings } from '../api/types'
 import ErrorState from '../components/common/ErrorState'
 import { useApiContext } from '../api/context'
 
@@ -83,6 +83,7 @@ export default function Settings() {
   const { data: settings, isLoading, error: settingsError, refetch } = useSettings()
   const updateMutation = useUpdateSettings()
   const testMutation = useTestProvider()
+  const queryClient = useQueryClient()
 
   // Local draft state for each provider's key + model
   const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({})
@@ -203,6 +204,11 @@ export default function Settings() {
       setSaveStatus('saved')
       // Reset all editing states after successful save
       setDrafts({})
+      // Invalidate all cached model queries so dropdowns refetch from the
+      // backend — which re-fetches from the provider API now that keys have
+      // changed. Without this the 5-minute staleTime would keep the
+      // pre-key fallback lists alive.
+      queryClient.invalidateQueries({ queryKey: ['models'] })
       setTimeout(() => setSaveStatus('idle'), 2500)
     } catch (err) {
       setSaveStatus('error')
@@ -263,6 +269,12 @@ export default function Settings() {
         ))}
       </div>
 
+      <TechniqueOverridesCard />
+
+      <AdversarialSettingsCard />
+
+      <WritingStyleCard />
+
       <ReportTemplatesCard />
 
       <div className="settings-footer">
@@ -283,6 +295,810 @@ export default function Settings() {
         >
           {saveStatus === 'saving' ? 'Saving...' : 'Save Settings'}
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// WritingStyleCard
+// ---------------------------------------------------------------------------
+
+/**
+ * Settings card for configuring user-provided style guide and writing exemplar.
+ *
+ * The style guide defines writing rules (tone, vocabulary, banned phrases) that
+ * override or supplement the built-in Sherman Kent defaults. The exemplar provides
+ * a concrete voice sample the model can match. Both are persisted to ~/.sat/ via
+ * the backend PUT endpoints and injected into report/synthesis system prompts on
+ * every analysis run.
+ *
+ * Local textarea state is initialized once from server data (via the initialized
+ * flag) so edits are not clobbered by React Query refetches while the user types.
+ */
+function WritingStyleCard() {
+  const { client } = useApiContext()
+  const queryClient = useQueryClient()
+  const [styleGuide, setStyleGuide] = useState('')
+  const [exemplar, setExemplar] = useState('')
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const { data: styleData } = useQuery({
+    queryKey: ['style-guide'],
+    queryFn: () => client!.getStyleGuide(),
+    enabled: !!client,
+    staleTime: 0,
+  })
+
+  const { data: exemplarData } = useQuery({
+    queryKey: ['exemplar'],
+    queryFn: () => client!.getExemplar(),
+    enabled: !!client,
+    staleTime: 0,
+  })
+
+  // Sync server data into local state on load — only once, so in-flight edits
+  // are not overwritten by React Query background refetches.
+  const [initialized, setInitialized] = useState(false)
+  useEffect(() => {
+    if (!initialized && styleData && exemplarData) {
+      setStyleGuide(styleData.content || '')
+      setExemplar(exemplarData.content || '')
+      setInitialized(true)
+    }
+  }, [initialized, styleData, exemplarData])
+
+  const hasContent = styleGuide.trim().length > 0 || exemplar.trim().length > 0
+  const serverHasContent =
+    (styleData?.content || '').trim().length > 0 ||
+    (exemplarData?.content || '').trim().length > 0
+
+  async function handleSave() {
+    if (!client) return
+    setSaveStatus('saving')
+    setSaveError(null)
+    try {
+      await Promise.all([
+        client.updateStyleGuide(styleGuide),
+        client.updateExemplar(exemplar),
+      ])
+      setSaveStatus('saved')
+      queryClient.invalidateQueries({ queryKey: ['style-guide'] })
+      queryClient.invalidateQueries({ queryKey: ['exemplar'] })
+      setTimeout(() => setSaveStatus('idle'), 2500)
+    } catch (err) {
+      setSaveStatus('error')
+      setSaveError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function handleClear() {
+    if (!client) return
+    setSaveStatus('saving')
+    setSaveError(null)
+    try {
+      await Promise.all([
+        client.updateStyleGuide(''),
+        client.updateExemplar(''),
+      ])
+      setStyleGuide('')
+      setExemplar('')
+      setSaveStatus('saved')
+      queryClient.invalidateQueries({ queryKey: ['style-guide'] })
+      queryClient.invalidateQueries({ queryKey: ['exemplar'] })
+      setTimeout(() => setSaveStatus('idle'), 2500)
+    } catch (err) {
+      setSaveStatus('error')
+      setSaveError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  return (
+    <div className="settings-provider-card">
+      <div className="settings-provider-header">
+        <div className="settings-provider-name-row">
+          <span className="settings-provider-name">Writing Style</span>
+          <span className={`intel-badge ${serverHasContent ? 'badge-cyan' : 'badge-green'}`}>
+            {serverHasContent ? 'Custom' : 'Default'}
+          </span>
+        </div>
+      </div>
+
+      <div className="form-section form-section-spaced">
+        <label className="form-label">Style Guide</label>
+        <span className="form-label-hint text-xs">
+          Define your writing rules: tone, vocabulary, sentence structure, what to avoid.
+          Overrides the built-in defaults where they conflict.
+        </span>
+        <textarea
+          className="model-override-input"
+          style={{ minHeight: '120px', resize: 'vertical', fontFamily: 'inherit' }}
+          value={styleGuide}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setStyleGuide(e.target.value)}
+          placeholder="e.g., Use short declarative sentences. Prefer Anglo-Saxon vocabulary over Latinate. Never use 'it is worth noting.'"
+        />
+      </div>
+
+      <div className="form-section form-section-spaced">
+        <label className="form-label">Writing Exemplar</label>
+        <span className="form-label-hint text-xs">
+          Paste 1-3 paragraphs of writing whose voice you want reports to match.
+          The model will study its tone, rhythm, and vocabulary.
+        </span>
+        <textarea
+          className="model-override-input"
+          style={{ minHeight: '150px', resize: 'vertical', fontFamily: 'inherit' }}
+          value={exemplar}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setExemplar(e.target.value)}
+          placeholder="Paste an example of the writing style you want..."
+        />
+      </div>
+
+      <div className="settings-key-edit-actions" style={{ marginTop: '0.5rem' }}>
+        <button
+          className="btn-primary settings-btn-sm"
+          onClick={handleSave}
+          disabled={saveStatus === 'saving'}
+        >
+          {saveStatus === 'saving' ? 'Saving...' : 'Save Style'}
+        </button>
+        {hasContent && (
+          <button
+            className="btn-secondary settings-btn-sm settings-btn-danger"
+            onClick={handleClear}
+            disabled={saveStatus === 'saving'}
+          >
+            Clear
+          </button>
+        )}
+        {saveStatus === 'saved' && (
+          <span className="settings-test-result settings-test-ok text-xs">Saved</span>
+        )}
+        {saveStatus === 'error' && saveError && (
+          <span className="settings-test-result settings-test-fail text-xs">{saveError}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// TechniqueOverridesCard
+// ---------------------------------------------------------------------------
+
+/**
+ * Settings card for per-technique model and temperature overrides.
+ *
+ * Allows users to override the model or temperature for individual CIA
+ * tradecraft techniques. Techniques are grouped by category (diagnostic,
+ * contrarian, imaginative) in collapsible sections — categories start
+ * collapsed because this is an advanced feature most users won't need.
+ *
+ * The active provider is the first one that has has_api_key: true in settings.
+ * Its model list populates the model dropdown. If no provider has a key,
+ * falls back to text input. Temperature inputs use the technique's
+ * default_temperature as placeholder so users understand what they're overriding.
+ *
+ * Save is independent of the provider Save Settings button — this card
+ * manages its own PUT /api/config/settings lifecycle, sending only the
+ * technique_overrides dict (providers are left unchanged by sending the
+ * existing provider state).
+ *
+ * @decision DEC-TECHNIQUE-OVERRIDES-UI-001
+ * @title TechniqueOverridesCard: independent save lifecycle, category-collapsible rows
+ * @status accepted
+ * @rationale Technique overrides are advanced settings that most users won't touch.
+ *   Collapsible categories reduce visual noise while keeping the feature discoverable.
+ *   The card has its own Save button (not coupled to the provider Save Settings button)
+ *   so technique override changes can be saved independently of provider key changes —
+ *   consistent with WritingStyleCard's pattern. Draft state tracks the full
+ *   technique_overrides dict, initialized from server data once, then managed locally.
+ */
+function TechniqueOverridesCard() {
+  const { client } = useApiContext()
+  const queryClient = useQueryClient()
+  const { data: settings } = useSettings()
+
+  // Fetch all registered techniques for category grouping and default_temperature placeholders.
+  const { data: techniques = [] } = useQuery<TechniqueInfo[]>({
+    queryKey: ['techniques'],
+    queryFn: () => client!.getTechniques(),
+    enabled: !!client,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // Determine the active analysis provider (first with a key configured).
+  // We use this provider's model list for the technique model dropdowns.
+  const providers = settings?.providers ?? {}
+  const activeProviderName = Object.entries(providers).find(
+    ([name, info]) => info.has_api_key && !HIDE_MODEL_PROVIDERS.has(name)
+  )?.[0] ?? null
+
+  // Fetch models for the active provider. If no provider has a key, models will be empty.
+  const { models: activeModels } = useModels(activeProviderName ?? '', !!activeProviderName)
+  const analysisModels = activeModels.analysis
+
+  // Draft state: technique_id → TechniqueOverride.
+  // Initialized from server on first load; tracks local edits until Save.
+  const [overrideDraft, setOverrideDraft] = useState<Record<string, TechniqueOverride>>({})
+  const [initialized, setInitialized] = useState(false)
+
+  useEffect(() => {
+    if (!initialized && settings) {
+      setOverrideDraft(settings.technique_overrides ?? {})
+      setInitialized(true)
+    }
+  }, [initialized, settings])
+
+  // Category collapse state. Default: all collapsed (advanced feature).
+  const [openCategories, setOpenCategories] = useState<Set<string>>(new Set())
+
+  function toggleCategory(cat: string) {
+    setOpenCategories(prev => {
+      const next = new Set(prev)
+      if (next.has(cat)) next.delete(cat)
+      else next.add(cat)
+      return next
+    })
+  }
+
+  // Save state
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  function setOverride(techniqueId: string, patch: Partial<TechniqueOverride>) {
+    setOverrideDraft(prev => {
+      const current = prev[techniqueId] ?? {}
+      const updated = { ...current, ...patch }
+      return { ...prev, [techniqueId]: updated }
+    })
+  }
+
+  // Count active overrides (entries where model or temperature is set).
+  const activeCount = Object.values(overrideDraft).filter(
+    ov => (ov.model ?? '') !== '' || ov.temperature != null
+  ).length
+
+  async function handleSave() {
+    if (!client) return
+    setSaveStatus('saving')
+    setSaveError(null)
+    try {
+      // Strip entries where both model and temperature are empty/null.
+      // The backend also cleans these but we do it client-side too for consistency.
+      const cleaned: Record<string, TechniqueOverride> = {}
+      for (const [tid, ov] of Object.entries(overrideDraft)) {
+        const model = ov.model ?? null
+        const temperature = ov.temperature ?? null
+        if (model !== null && model !== '' || temperature !== null) {
+          cleaned[tid] = {
+            model: (model === '') ? null : model,
+            temperature,
+          }
+        }
+      }
+
+      // Build the full settings payload. Providers are passed as-is (no API keys
+      // in the payload — empty string signals "keep existing" on the backend).
+      const providerPayload: Record<string, { api_key: string; default_model: string; research_model: string }> = {}
+      for (const [name, info] of Object.entries(providers)) {
+        providerPayload[name] = {
+          api_key: '',
+          default_model: info.default_model,
+          research_model: info.research_model,
+        }
+      }
+
+      await client.updateSettings({
+        providers: providerPayload,
+        technique_overrides: cleaned,
+      })
+      setSaveStatus('saved')
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setTimeout(() => setSaveStatus('idle'), 2500)
+    } catch (err) {
+      setSaveStatus('error')
+      setSaveError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  function handleClearAll() {
+    setOverrideDraft({})
+  }
+
+  // Group techniques by category.
+  const CATEGORY_ORDER = ['diagnostic', 'contrarian', 'imaginative'] as const
+  const byCategory = new Map<string, TechniqueInfo[]>()
+  for (const tech of techniques) {
+    const list = byCategory.get(tech.category) ?? []
+    list.push(tech)
+    byCategory.set(tech.category, list)
+  }
+  // Sort each category's techniques by their order field.
+  for (const [cat, list] of byCategory) {
+    byCategory.set(cat, [...list].sort((a, b) => a.order - b.order))
+  }
+
+  const CATEGORY_LABELS: Record<string, string> = {
+    diagnostic: 'Diagnostic',
+    contrarian: 'Contrarian',
+    imaginative: 'Imaginative',
+  }
+
+  return (
+    <div className="settings-provider-card">
+      <div className="settings-provider-header">
+        <div className="settings-provider-name-row">
+          <span className="settings-provider-name">Technique Overrides</span>
+          <span className={`intel-badge ${activeCount > 0 ? 'badge-cyan' : 'badge-green'}`}>
+            {activeCount > 0 ? `${activeCount} override${activeCount > 1 ? 's' : ''}` : 'Default'}
+          </span>
+        </div>
+      </div>
+
+      <div className="form-section">
+        <span className="form-label-hint text-xs">
+          Override model or temperature for individual techniques. Leave blank to use defaults.
+        </span>
+      </div>
+
+      {CATEGORY_ORDER.map(cat => {
+        const catTechniques = byCategory.get(cat) ?? []
+        if (catTechniques.length === 0) return null
+        const isOpen = openCategories.has(cat)
+        return (
+          <div key={cat} className="form-section form-section-spaced">
+            <button
+              type="button"
+              className="btn-secondary settings-btn-sm"
+              style={{ width: '100%', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+              onClick={() => toggleCategory(cat)}
+            >
+              <span className="form-label" style={{ margin: 0 }}>
+                {CATEGORY_LABELS[cat] ?? cat}
+              </span>
+              <span className="text-xs text-secondary">{isOpen ? '▲' : '▼'}</span>
+            </button>
+            {isOpen && (
+              <div style={{ marginTop: '0.5rem' }}>
+                {catTechniques.map(tech => {
+                  const ov = overrideDraft[tech.id] ?? {}
+                  const tempPlaceholder = tech.default_temperature != null
+                    ? String(tech.default_temperature)
+                    : '0.3 (provider default)'
+                  return (
+                    <div
+                      key={tech.id}
+                      className="form-section"
+                      style={{ paddingLeft: '0.5rem', borderLeft: '2px solid var(--border-subtle, #2a2a3a)', marginBottom: '0.75rem' }}
+                    >
+                      <label className="form-label" style={{ marginBottom: '0.25rem' }}>
+                        {tech.name}
+                      </label>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        {/* Model: dropdown if we have models, else text input */}
+                        {analysisModels.length > 0 ? (
+                          <ModelSelect
+                            id={`tech-model-${tech.id}`}
+                            models={analysisModels}
+                            value={ov.model ?? ''}
+                            placeholder=""
+                            onChange={val => setOverride(tech.id, { model: val || null })}
+                          />
+                        ) : (
+                          <input
+                            id={`tech-model-${tech.id}`}
+                            type="text"
+                            className="model-override-input"
+                            style={{ flex: '1 1 180px' }}
+                            value={ov.model ?? ''}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setOverride(tech.id, { model: e.target.value || null })
+                            }
+                            placeholder="model (blank = provider default)"
+                          />
+                        )}
+                        {/* Temperature */}
+                        <input
+                          id={`tech-temp-${tech.id}`}
+                          type="number"
+                          className="model-override-input"
+                          style={{ flex: '0 0 120px', minWidth: '100px' }}
+                          step="0.1"
+                          min="0"
+                          max="2"
+                          value={ov.temperature ?? ''}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const raw = e.target.value
+                            setOverride(tech.id, {
+                              temperature: raw === '' ? null : parseFloat(raw),
+                            })
+                          }}
+                          placeholder={tempPlaceholder}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      <div className="settings-key-edit-actions" style={{ marginTop: '0.5rem' }}>
+        <button
+          className="btn-primary settings-btn-sm"
+          onClick={handleSave}
+          disabled={saveStatus === 'saving'}
+        >
+          {saveStatus === 'saving' ? 'Saving...' : 'Save Overrides'}
+        </button>
+        {activeCount > 0 && (
+          <button
+            className="btn-secondary settings-btn-sm settings-btn-danger"
+            onClick={handleClearAll}
+            disabled={saveStatus === 'saving'}
+          >
+            Clear All
+          </button>
+        )}
+        {saveStatus === 'saved' && (
+          <span className="settings-test-result settings-test-ok text-xs">Saved</span>
+        )}
+        {saveStatus === 'error' && saveError && (
+          <span className="settings-test-result settings-test-fail text-xs">{saveError}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// AdversarialSettingsCard
+// ---------------------------------------------------------------------------
+
+/**
+ * Settings card for configuring persistent adversarial analysis defaults.
+ *
+ * Allows users to set default enabled/mode/rounds and challenger/investigator
+ * provider+model overrides. These are stored in ~/.sat/config.json under the
+ * 'adversarial' key and picked up by build_adversarial_config() on every run.
+ *
+ * The investigator section is only shown when mode is "trident" since dual mode
+ * uses only a challenger. Provider dropdowns fetch model lists via useModels()
+ * to populate the model selector. When no provider is selected, the model
+ * selector is disabled.
+ *
+ * This card has its own independent save lifecycle — changes here do not
+ * interact with the provider Save Settings button at the bottom of the page.
+ *
+ * @decision DEC-ADVERSARIAL-SETTINGS-UI-001
+ * @title AdversarialSettingsCard: independent save, full replacement on save
+ * @status accepted
+ * @rationale Consistent with WritingStyleCard and TechniqueOverridesCard patterns.
+ *   The adversarial section is a full replacement on PUT (not field-by-field merge)
+ *   so the user can clear provider/model overrides by blanking them and saving.
+ *   Draft state is initialized once from server data to prevent React Query
+ *   background refetches from clobbering in-flight edits.
+ */
+function AdversarialSettingsCard() {
+  const { data: settings } = useSettings()
+  const queryClient = useQueryClient()
+  const { client } = useApiContext()
+
+  // Local draft state
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [mode, setMode] = useState<string>('')
+  const [rounds, setRounds] = useState<string>('')
+  const [challengerProvider, setChallengerProvider] = useState<string>('')
+  const [challengerModel, setChallengerModel] = useState<string>('')
+  const [investigatorProvider, setInvestigatorProvider] = useState<string>('')
+  const [investigatorModel, setInvestigatorModel] = useState<string>('')
+
+  // Initialize from server data (once, so in-flight edits are not clobbered)
+  const [initialized, setInitialized] = useState(false)
+  useEffect(() => {
+    if (!initialized && settings) {
+      const adv: AdversarialSettings | null | undefined = settings.adversarial
+      setEnabled(adv?.enabled ?? null)
+      setMode(adv?.mode ?? '')
+      setRounds(adv?.rounds != null ? String(adv.rounds) : '')
+      setChallengerProvider(adv?.challenger_provider ?? '')
+      setChallengerModel(adv?.challenger_model ?? '')
+      setInvestigatorProvider(adv?.investigator_provider ?? '')
+      setInvestigatorModel(adv?.investigator_model ?? '')
+      setInitialized(true)
+    }
+  }, [initialized, settings])
+
+  // Fetch model lists for the selected providers
+  const { models: challengerModels } = useModels(challengerProvider, !!challengerProvider)
+  const { models: investigatorModels } = useModels(investigatorProvider, !!investigatorProvider)
+
+  // Save state
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const providers = settings?.providers ?? {}
+
+  // Badge: "Configured" if any adversarial setting is non-empty
+  const isConfigured = !!(
+    enabled != null ||
+    mode ||
+    rounds ||
+    challengerProvider ||
+    challengerModel ||
+    investigatorProvider ||
+    investigatorModel
+  )
+
+  async function handleSave() {
+    if (!client) return
+    setSaveStatus('saving')
+    setSaveError(null)
+    try {
+      // Build adversarial object — strip empty strings to undefined
+      const adversarial: AdversarialSettings = {
+        enabled: enabled,
+        mode: mode || undefined,
+        rounds: rounds ? Number(rounds) : undefined,
+        challenger_provider: challengerProvider || undefined,
+        challenger_model: challengerModel || undefined,
+        investigator_provider: investigatorProvider || undefined,
+        investigator_model: investigatorModel || undefined,
+      }
+
+      // Build providers payload (preserve existing — no API keys, just models)
+      const providerPayload: Record<string, { api_key: string; default_model: string; research_model: string }> = {}
+      for (const [name, info] of Object.entries(providers)) {
+        providerPayload[name] = {
+          api_key: '',
+          default_model: info.default_model,
+          research_model: info.research_model,
+        }
+      }
+
+      await client.updateSettings({ providers: providerPayload, adversarial })
+      setSaveStatus('saved')
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setTimeout(() => setSaveStatus('idle'), 2500)
+    } catch (err) {
+      setSaveStatus('error')
+      setSaveError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function handleClear() {
+    if (!client) return
+    setSaveStatus('saving')
+    setSaveError(null)
+    try {
+      setEnabled(null)
+      setMode('')
+      setRounds('')
+      setChallengerProvider('')
+      setChallengerModel('')
+      setInvestigatorProvider('')
+      setInvestigatorModel('')
+
+      const providerPayload: Record<string, { api_key: string; default_model: string; research_model: string }> = {}
+      for (const [name, info] of Object.entries(providers)) {
+        providerPayload[name] = {
+          api_key: '',
+          default_model: info.default_model,
+          research_model: info.research_model,
+        }
+      }
+
+      await client.updateSettings({ providers: providerPayload, adversarial: null })
+      setSaveStatus('saved')
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setTimeout(() => setSaveStatus('idle'), 2500)
+    } catch (err) {
+      setSaveStatus('error')
+      setSaveError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const showInvestigator = mode === 'trident'
+
+  return (
+    <div className="settings-provider-card">
+      <div className="settings-provider-header">
+        <div className="settings-provider-name-row">
+          <span className="settings-provider-name">Adversarial Analysis</span>
+          <span className={`intel-badge ${isConfigured ? 'badge-cyan' : 'badge-green'}`}>
+            {isConfigured ? 'Configured' : 'Default'}
+          </span>
+        </div>
+      </div>
+
+      <div className="form-section">
+        <span className="form-label-hint text-xs">
+          Configure adversarial critique and investigation models. Leave blank to auto-detect.
+        </span>
+      </div>
+
+      {/* Enabled toggle */}
+      <div className="form-section form-section-spaced">
+        <label className="form-label">Enabled</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <input
+            type="checkbox"
+            id="adv-enabled"
+            checked={enabled === true}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setEnabled(e.target.checked ? true : null)
+            }
+          />
+          <label htmlFor="adv-enabled" className="text-xs text-secondary">
+            {enabled === true ? 'On by default' : 'Use per-run setting'}
+          </label>
+        </div>
+      </div>
+
+      {/* Mode radio */}
+      <div className="form-section form-section-spaced">
+        <label className="form-label">Mode</label>
+        <div className="form-radio-row">
+          <label className="form-radio-label">
+            <input
+              type="radio"
+              name="adv-mode"
+              value="dual"
+              checked={mode === 'dual'}
+              onChange={() => setMode('dual')}
+            />
+            Dual
+          </label>
+          <label className="form-radio-label">
+            <input
+              type="radio"
+              name="adv-mode"
+              value="trident"
+              checked={mode === 'trident'}
+              onChange={() => setMode('trident')}
+            />
+            Trident
+          </label>
+          <label className="form-radio-label">
+            <input
+              type="radio"
+              name="adv-mode"
+              value=""
+              checked={mode === ''}
+              onChange={() => setMode('')}
+            />
+            Auto
+          </label>
+        </div>
+      </div>
+
+      {/* Rounds */}
+      <div className="form-section form-section-spaced">
+        <label className="form-label" htmlFor="adv-rounds">Rounds</label>
+        <input
+          id="adv-rounds"
+          type="number"
+          className="model-override-input"
+          style={{ width: '80px' }}
+          min="1"
+          max="5"
+          value={rounds}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setRounds(e.target.value)}
+          placeholder="1–5"
+        />
+      </div>
+
+      {/* Challenger */}
+      <div className="form-section form-section-spaced">
+        <label className="form-label">Challenger</label>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <select
+            className="model-override-input"
+            style={{ flex: '0 0 140px' }}
+            value={challengerProvider}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+              setChallengerProvider(e.target.value)
+              setChallengerModel('')
+            }}
+          >
+            <option value="">Auto-detect</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+          </select>
+          {challengerProvider && challengerModels.analysis.length > 0 ? (
+            <ModelSelect
+              id="adv-challenger-model"
+              models={challengerModels.analysis}
+              value={challengerModel}
+              placeholder="model (blank = provider default)"
+              onChange={(val: string) => setChallengerModel(val)}
+            />
+          ) : (
+            <input
+              id="adv-challenger-model"
+              type="text"
+              className="model-override-input"
+              style={{ flex: '1 1 180px' }}
+              value={challengerModel}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setChallengerModel(e.target.value)}
+              placeholder={challengerProvider ? 'model (blank = provider default)' : 'select provider first'}
+              disabled={!challengerProvider}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Investigator — only shown when mode is trident */}
+      {showInvestigator && (
+        <div className="form-section form-section-spaced">
+          <label className="form-label">Investigator</label>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <select
+              className="model-override-input"
+              style={{ flex: '0 0 140px' }}
+              value={investigatorProvider}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                setInvestigatorProvider(e.target.value)
+                setInvestigatorModel('')
+              }}
+            >
+              <option value="">Auto-detect</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+            </select>
+            {investigatorProvider && investigatorModels.analysis.length > 0 ? (
+              <ModelSelect
+                id="adv-investigator-model"
+                models={investigatorModels.analysis}
+                value={investigatorModel}
+                placeholder="model (blank = provider default)"
+                onChange={(val: string) => setInvestigatorModel(val)}
+              />
+            ) : (
+              <input
+                id="adv-investigator-model"
+                type="text"
+                className="model-override-input"
+                style={{ flex: '1 1 180px' }}
+                value={investigatorModel}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setInvestigatorModel(e.target.value)}
+                placeholder={investigatorProvider ? 'model (blank = provider default)' : 'select provider first'}
+                disabled={!investigatorProvider}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="settings-key-edit-actions" style={{ marginTop: '0.5rem' }}>
+        <button
+          className="btn-primary settings-btn-sm"
+          onClick={handleSave}
+          disabled={saveStatus === 'saving'}
+        >
+          {saveStatus === 'saving' ? 'Saving...' : 'Save'}
+        </button>
+        {isConfigured && (
+          <button
+            className="btn-secondary settings-btn-sm settings-btn-danger"
+            onClick={handleClear}
+            disabled={saveStatus === 'saving'}
+          >
+            Clear All
+          </button>
+        )}
+        {saveStatus === 'saved' && (
+          <span className="settings-test-result settings-test-ok text-xs">Saved</span>
+        )}
+        {saveStatus === 'error' && saveError && (
+          <span className="settings-test-result settings-test-fail text-xs">{saveError}</span>
+        )}
       </div>
     </div>
   )

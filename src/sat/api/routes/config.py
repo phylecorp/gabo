@@ -72,11 +72,15 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile
 
 from sat.api.models import (
+    AdversarialSettings,
     AppSettings,
     ProviderInfo,
     ProviderSettings,
     ProviderSettingsResponse,
     SettingsResponse,
+    StyleTextRequest,
+    StyleTextResponse,
+    TechniqueOverrideSettings,
     TemplateInfo,
     TemplateUploadResponse,
     TestProviderRequest,
@@ -136,7 +140,8 @@ def _load_settings(config_path: Path) -> SettingsResponse:
     """Build SettingsResponse from config file + environment variables.
 
     Load order per provider: config file > environment > default.
-    Returns a SettingsResponse with masked key previews.
+    Returns a SettingsResponse with masked key previews and technique_overrides
+    loaded from the technique_overrides key in config.json.
     """
     file_data: dict = {}
     if config_path.exists():
@@ -189,7 +194,49 @@ def _load_settings(config_path: Path) -> SettingsResponse:
             source=source,
         )
 
-    return SettingsResponse(providers=providers)
+    # Load technique overrides from the already-parsed file_data dict.
+    # This keeps _load_settings self-contained: it reads from config_path (its
+    # parameter) rather than via load_technique_overrides() which has its own
+    # path resolver. Consistent with how providers are loaded above.
+    raw_overrides: dict = file_data.get("technique_overrides", {})
+    technique_overrides: dict[str, TechniqueOverrideSettings] = {}
+    for tid, cfg in raw_overrides.items():
+        if isinstance(cfg, dict):
+            try:
+                technique_overrides[tid] = TechniqueOverrideSettings(
+                    model=cfg.get("model"),
+                    temperature=cfg.get("temperature"),
+                )
+            except Exception:  # noqa: BLE001
+                # Invalid values (e.g. temperature out of range) are silently skipped
+                # so a bad entry doesn't break the settings page entirely.
+                pass
+
+    # Load adversarial defaults. A present-but-empty dict yields an all-None
+    # AdversarialSettings; a missing key yields None. Both are valid — the
+    # frontend treats None as "no defaults configured".
+    adversarial: AdversarialSettings | None = None
+    raw_adversarial = file_data.get("adversarial")
+    if isinstance(raw_adversarial, dict) and raw_adversarial:
+        try:
+            adversarial = AdversarialSettings(
+                enabled=raw_adversarial.get("enabled"),
+                mode=raw_adversarial.get("mode"),
+                rounds=raw_adversarial.get("rounds"),
+                challenger_provider=raw_adversarial.get("challenger_provider"),
+                challenger_model=raw_adversarial.get("challenger_model"),
+                investigator_provider=raw_adversarial.get("investigator_provider"),
+                investigator_model=raw_adversarial.get("investigator_model"),
+            )
+        except Exception:  # noqa: BLE001
+            # Invalid values (e.g. rounds out of range) are silently skipped.
+            pass
+
+    return SettingsResponse(
+        providers=providers,
+        technique_overrides=technique_overrides,
+        adversarial=adversarial,
+    )
 
 
 def _save_config(settings: AppSettings, config_path: Path) -> None:
@@ -199,9 +246,13 @@ def _save_config(settings: AppSettings, config_path: Path) -> None:
     API keys stored in the config file from being readable by other users.
     The chmod is applied unconditionally — both on first write and on overwrite —
     because file creation mode is subject to the process umask.
+
+    technique_overrides entries where both model and temperature are None are
+    cleaned up before writing (they have no effect and add noise to the file).
+    If no overrides remain after cleanup, the key is omitted entirely.
     """
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    data = {
+    data: dict = {
         "providers": {
             name: {
                 "api_key": ps.api_key,
@@ -211,6 +262,39 @@ def _save_config(settings: AppSettings, config_path: Path) -> None:
             for name, ps in settings.providers.items()
         }
     }
+
+    # Clean technique_overrides: keep only entries with at least one non-None value.
+    # Entries where both model and temperature are None are no-ops and are omitted
+    # to keep config.json lean.
+    cleaned_overrides = {
+        tid: {"model": ov.model, "temperature": ov.temperature}
+        for tid, ov in settings.technique_overrides.items()
+        if ov.model is not None or ov.temperature is not None
+    }
+    if cleaned_overrides:
+        data["technique_overrides"] = cleaned_overrides
+
+    # Persist adversarial defaults. Only write the key when at least one field is
+    # non-None — an all-None adversarial object adds noise without meaning.
+    # The adversarial section is a full replacement: we write exactly what the
+    # caller sent, stripped of None values.
+    adv = settings.adversarial
+    if adv is not None:
+        adv_dict = {
+            k: v for k, v in {
+                "enabled": adv.enabled,
+                "mode": adv.mode,
+                "rounds": adv.rounds,
+                "challenger_provider": adv.challenger_provider,
+                "challenger_model": adv.challenger_model,
+                "investigator_provider": adv.investigator_provider,
+                "investigator_model": adv.investigator_model,
+            }.items()
+            if v is not None
+        }
+        if adv_dict:
+            data["adversarial"] = adv_dict
+
     config_path.write_text(json.dumps(data, indent=2))
     os.chmod(config_path, 0o600)
 
@@ -431,7 +515,15 @@ async def update_settings(settings: AppSettings) -> SettingsResponse:
                 research_model=v.get("research_model", "") if isinstance(v, dict) else "",
             )
             for name, v in existing_providers.items()
-        }
+        },
+        # technique_overrides: incoming values replace the full set.
+        # We don't merge with existing — the caller sends the complete desired state.
+        # Cleanup of all-None entries is handled in _save_config.
+        technique_overrides=settings.technique_overrides,
+        # adversarial: incoming value replaces the full section (not field-by-field merge).
+        # None means "clear the adversarial section"; a non-None value with all-None
+        # fields is also treated as "no defaults" by _save_config.
+        adversarial=settings.adversarial,
     )
 
     _save_config(merged, config_path)
@@ -620,3 +712,84 @@ async def delete_template(filename: str) -> dict:
     target.unlink()
     logger.info("Template deleted: %s", filename)
     return {"deleted": filename}
+
+
+# ---------------------------------------------------------------------------
+# Writing style endpoints
+#
+# @decision DEC-API-012
+# @title Style guide and exemplar stored as plain markdown files, exposed via GET/PUT endpoints
+# @status accepted
+# @rationale Style guide and exemplar content can be lengthy (1000+ words). Storing them
+# in config.json would bloat the main config file and complicate the merge logic in
+# update_settings. Separate .md files in ~/.sat/ keep them isolated, human-readable, and
+# editable outside the app. The API provides simple GET/PUT with the same 0o600 permission
+# pattern used for config.json. Empty content on PUT deletes the file rather than storing
+# an empty file, keeping ~/.sat/ clean.
+# ---------------------------------------------------------------------------
+
+
+def _get_style_guide_path() -> Path:
+    """Return path to ~/.sat/style_guide.md. Overrideable in tests."""
+    return Path.home() / ".sat" / "style_guide.md"
+
+
+def _get_exemplar_path() -> Path:
+    """Return path to ~/.sat/exemplar.md. Overrideable in tests."""
+    return Path.home() / ".sat" / "exemplar.md"
+
+
+@router.get("/api/config/style-guide", response_model=StyleTextResponse)
+async def get_style_guide() -> StyleTextResponse:
+    """Return the current style guide content, or empty string if not set."""
+    path = _get_style_guide_path()
+    if path.exists():
+        try:
+            content = path.read_text(encoding="utf-8")
+            return StyleTextResponse(content=content)
+        except OSError:
+            return StyleTextResponse()
+    return StyleTextResponse()
+
+
+@router.put("/api/config/style-guide", response_model=StyleTextResponse)
+async def update_style_guide(body: StyleTextRequest) -> StyleTextResponse:
+    """Save or clear the style guide. Empty content deletes the file."""
+    path = _get_style_guide_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if body.content.strip():
+        path.write_text(body.content, encoding="utf-8")
+        os.chmod(path, 0o600)
+        return StyleTextResponse(content=body.content, status="saved")
+    else:
+        if path.exists():
+            path.unlink()
+        return StyleTextResponse(content="", status="cleared")
+
+
+@router.get("/api/config/exemplar", response_model=StyleTextResponse)
+async def get_exemplar() -> StyleTextResponse:
+    """Return the current writing exemplar content, or empty string if not set."""
+    path = _get_exemplar_path()
+    if path.exists():
+        try:
+            content = path.read_text(encoding="utf-8")
+            return StyleTextResponse(content=content)
+        except OSError:
+            return StyleTextResponse()
+    return StyleTextResponse()
+
+
+@router.put("/api/config/exemplar", response_model=StyleTextResponse)
+async def update_exemplar(body: StyleTextRequest) -> StyleTextResponse:
+    """Save or clear the writing exemplar. Empty content deletes the file."""
+    path = _get_exemplar_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if body.content.strip():
+        path.write_text(body.content, encoding="utf-8")
+        os.chmod(path, 0o600)
+        return StyleTextResponse(content=body.content, status="saved")
+    else:
+        if path.exists():
+            path.unlink()
+        return StyleTextResponse(content="", status="cleared")

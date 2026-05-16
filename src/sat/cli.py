@@ -14,6 +14,16 @@ it when all three providers have API keys. Auto-detection: if investigator is no
 explicitly disabled and a third provider is available, trident mode activates
 automatically when adversarial is enabled. Explicit --adversarial-mode=dual
 disables this.
+
+@decision DEC-CLI-003: `task` subcommand is a thin wrapper over plan_task + run_analysis.
+@title sat task <type> <question> — template-driven analysis
+@status accepted
+@rationale The `task` command inverts the analysis flow: start from a deliverable
+template, compute an AnalysisConfig via the task planner, then call run_analysis()
+with that config. The planner runs synchronously as part of the CLI flow (before the
+pipeline) so the user sees the plan summary before execution starts. The command
+follows the same AnalysisConfig construction pattern as `analyze` — only the
+technique selection step is replaced by the task planner.
 """
 
 from __future__ import annotations
@@ -56,9 +66,10 @@ def analyze(
             "--techniques", "-t", help="Comma-separated technique IDs (auto-select if omitted)"
         ),
     ] = None,
-    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Output directory")] = Path(
-        "."
-    ),
+    output_dir: Annotated[
+        Optional[Path],
+        typer.Option("--output-dir", "-o", help="Output directory (default: ~/.sat/runs/)"),
+    ] = None,
     provider: Annotated[str, typer.Option("--provider", "-p", help="LLM provider")] = "anthropic",
     model: Annotated[
         Optional[str],
@@ -362,6 +373,165 @@ def analyze(
     from sat.pipeline import run_analysis
 
     asyncio.run(run_analysis(config))
+
+
+@app.command("task")
+def task_cmd(
+    task_type: Annotated[
+        Optional[str],
+        typer.Argument(help="Task type ID: threat, brief, bda, annex_b, annex_l"),
+    ] = None,
+    question: Annotated[
+        Optional[str],
+        typer.Argument(help="The analytic question to investigate"),
+    ] = None,
+    evidence: Annotated[
+        Optional[str], typer.Option("--evidence", "-e", help="Evidence text")
+    ] = None,
+    evidence_file: Annotated[
+        Optional[Path],
+        typer.Option("--evidence-file", "-f", help="File or directory containing evidence"),
+    ] = None,
+    research: Annotated[
+        bool, typer.Option("--research/--no-research", "-r", help="Enable deep research")
+    ] = False,
+    list_types: Annotated[
+        bool, typer.Option("--list-types", help="List available task types and exit")
+    ] = False,
+    provider: Annotated[str, typer.Option("--provider", "-p", help="LLM provider")] = "anthropic",
+    model: Annotated[
+        Optional[str],
+        typer.Option("--model", "-m", help="Model identifier (default: provider default)"),
+    ] = None,
+    output_dir: Annotated[
+        Optional[Path],
+        typer.Option("--output-dir", "-o", help="Output directory (default: ~/.sat/runs/)"),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
+) -> None:
+    """Run template-driven analysis starting from a deliverable type.
+
+    Examples:
+      sat task --list-types
+      sat task threat "What is X's naval capability?"
+      sat task brief "Will the ceasefire hold?" --research
+      sat task bda "What damage was inflicted on target Y?" -f damage-report.txt
+    """
+    load_dotenv()
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.WARNING)
+
+    from sat.tasks.presets import get_preset, list_presets
+
+    # --list-types: print all task types and exit
+    if list_types:
+        table = Table(title="Available Task Types", box=box.ROUNDED)
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="bold")
+        table.add_column("Sections", justify="right")
+        table.add_column("Description")
+        for preset in list_presets():
+            table.add_row(
+                preset.id,
+                preset.name,
+                str(len(preset.sections)),
+                preset.description[:80] + ("..." if len(preset.description) > 80 else ""),
+            )
+        console.print(table)
+        raise typer.Exit(code=0)
+
+    # Validate required args
+    if not task_type:
+        console.print("[red]Error: task_type is required. Use --list-types to see options.[/red]")
+        raise typer.Exit(code=1)
+    if not question:
+        console.print("[red]Error: question is required.[/red]")
+        raise typer.Exit(code=1)
+
+    # Load preset
+    try:
+        preset = get_preset(task_type)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    # Resolve evidence
+    evidence_text = evidence
+    if evidence_file:
+        if not evidence_file.exists():
+            console.print(f"[red]Error: Evidence path not found: {evidence_file}[/red]")
+            raise typer.Exit(code=1)
+        if evidence_file.is_dir():
+            parts = []
+            for p in sorted(evidence_file.rglob("*")):
+                if p.is_file() and not p.name.startswith("."):
+                    try:
+                        parts.append(f"--- Source: {p.relative_to(evidence_file)} ---\n{p.read_text(encoding='utf-8')}")
+                    except Exception as exc:
+                        if verbose:
+                            console.print(f"[yellow]Warning: Could not read {p}: {exc}[/yellow]")
+            evidence_text = "\n\n".join(parts)
+        else:
+            evidence_text = evidence_file.read_text(encoding="utf-8")
+
+    # Build provider and run planner
+    provider_cfg = ProviderConfig(provider=provider, model=model)
+
+    async def _run() -> None:
+        from sat.providers.registry import create_provider
+        from sat.tasks.planner import build_analysis_config, plan_task
+
+        llm_provider = create_provider(provider_cfg)
+
+        console.print(f"\n[bold]Planning {preset.name}...[/bold]")
+        plan = await plan_task(preset, question, evidence_text, llm_provider)
+
+        # Display plan summary
+        console.print(f"\n[bold cyan]Task Plan: {preset.name}[/bold cyan]")
+        console.print(f"[dim]Techniques:[/dim] {', '.join(plan.techniques)}")
+
+        sections_table = Table(box=box.SIMPLE, show_header=True)
+        sections_table.add_column("Section")
+        sections_table.add_column("Techniques")
+        sections_table.add_column("Synthesis")
+        for sm in plan.sections:
+            sections_table.add_row(
+                sm.section_id,
+                ", ".join(sm.technique_ids),
+                "yes" if sm.synthesis_needed else "no",
+            )
+        console.print(sections_table)
+
+        if plan.evidence_gaps:
+            console.print(f"[yellow]Evidence gaps:[/yellow] {'; '.join(plan.evidence_gaps)}")
+        if plan.research_queries:
+            console.print(f"[dim]Research queries:[/dim] {len(plan.research_queries)} planned")
+
+        console.print(f"\n[dim]{plan.rationale}[/dim]\n")
+
+        # Build AnalysisConfig and run pipeline
+        from sat.config import PreprocessingConfig, ReportConfig, ResearchConfig
+
+        base_config = AnalysisConfig(
+            question=question,
+            evidence=evidence_text,
+            output_dir=output_dir,
+            provider=provider_cfg,
+            research=ResearchConfig(enabled=research),
+            preprocessing=PreprocessingConfig(enabled=True),
+            report=ReportConfig(enabled=True, fmt="both"),
+            verbose=verbose,
+        )
+
+        config = build_analysis_config(plan, base_config)
+
+        from sat.pipeline import run_analysis
+
+        await run_analysis(config)
+
+    asyncio.run(_run())
 
 
 @app.command("list-techniques")

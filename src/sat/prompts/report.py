@@ -19,6 +19,19 @@ the primary input (not prior_results), full technique artifact JSONs are seriali
 verbatim for specificity, and evidence is optional context. Reusing build_user_message()
 would require awkward shoehorning of synthesis data into prior_results format. A
 dedicated builder keeps the structure clear and explicitly labeled for the LLM.
+
+@decision DEC-PROMPT-REPORT-003
+@title User-provided style guide and exemplar injected into report system prompt
+@status accepted
+@rationale Hardcoded style guidance (Sherman Kent tradition, banned phrases) produces
+reports that still read as AI-generated. Users need to override the default voice with
+their own writing rules and examples. Style guide and exemplar are loaded from
+~/.sat/style_guide.md and ~/.sat/exemplar.md respectively. The style guide supplements
+or overrides default rules; the exemplar provides a concrete voice reference. Both are
+appended to the system prompt after the base content so the LLM sees defaults first,
+then user overrides. Synthesis only gets the style guide (not exemplar) since it
+produces structured JSON, not prose — only the bottom_line_assessment field benefits
+from tone adjustment.
 """
 
 from __future__ import annotations
@@ -186,5 +199,30 @@ def build_prompt(ctx: dict) -> tuple[str, list[LLMMessage]]:
     else:
         parts.append("## Technique Artifacts\n\nNo technique artifacts available.\n")
 
+    # Build system prompt with optional user style overrides (DEC-PROMPT-REPORT-003).
+    # Imports are deferred to avoid circular import on module load.
+    from sat.config import load_style_guide, load_exemplar
+
+    system_prompt = REPORT_SYSTEM_PROMPT
+
+    style_guide = load_style_guide()
+    exemplar = load_exemplar()
+
+    if style_guide:
+        system_prompt += (
+            "\n\n## User Style Guide\n\n"
+            "The following style guide was provided by the user. "
+            "Where it conflicts with the defaults above, the User Style Guide takes precedence.\n\n"
+            + style_guide
+        )
+    if exemplar:
+        system_prompt += (
+            "\n\n## Writing Exemplar — Match This Voice\n\n"
+            "The following is an example of the writing style the user wants. "
+            "Study its tone, sentence structure, vocabulary, and rhythm. "
+            "Match this voice in your report.\n\n"
+            + exemplar
+        )
+
     user_content = "\n".join(part for part in parts if part)
-    return REPORT_SYSTEM_PROMPT, [LLMMessage(role="user", content=user_content)]
+    return system_prompt, [LLMMessage(role="user", content=user_content)]

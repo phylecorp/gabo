@@ -42,6 +42,7 @@ import type {
   ModelsResponse,
   TemplateInfo,
   TemplateUploadResponse,
+  StyleTextResponse,
 } from './types'
 
 export class SatClient {
@@ -314,5 +315,27 @@ export class SatClient {
       `/api/config/templates/${encodeURIComponent(filename)}`,
       { method: 'DELETE' },
     )
+  }
+
+  async getStyleGuide(): Promise<StyleTextResponse> {
+    return this.request<StyleTextResponse>('/api/config/style-guide')
+  }
+
+  async updateStyleGuide(content: string): Promise<StyleTextResponse> {
+    return this.request<StyleTextResponse>('/api/config/style-guide', {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    })
+  }
+
+  async getExemplar(): Promise<StyleTextResponse> {
+    return this.request<StyleTextResponse>('/api/config/exemplar')
+  }
+
+  async updateExemplar(content: string): Promise<StyleTextResponse> {
+    return this.request<StyleTextResponse>('/api/config/exemplar', {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    })
   }
 }

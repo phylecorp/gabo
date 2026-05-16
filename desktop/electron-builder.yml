@@ -47,9 +47,10 @@ mac:
     - target: dmg
       arch: [arm64]
   icon: build/icon.icns
-  hardenedRuntime: true
-  gatekeeperAssess: false
-  # Code signing env vars: CSC_LINK, CSC_KEY_PASSWORD (set in CI secrets)
+  # When a Developer ID is available, enable these and set CSC_LINK + CSC_KEY_PASSWORD:
+  #   hardenedRuntime: true
+  #   gatekeeperAssess: false
+  identity: null  # ad-hoc sign; prevents electron-builder from erroring on missing cert
 
 dmg:
   contents:

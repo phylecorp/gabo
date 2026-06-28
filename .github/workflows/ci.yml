@@ -1,5 +1,9 @@
 name: CI
 
+# CI/CD via the shared phylecorp library (phylecorp/cicd).
+#   - pull_request : lint + test + build (validation only).
+#   - push to main : lint + test -> autoversion -> uv build -> git tag -> GitHub release.
+# The git tag is the version surface for git-dep consumers.
 on:
   push:
     branches: [main]
@@ -7,29 +11,13 @@ on:
     branches: [main]
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: pip install -e ".[dev,all]"
-      - name: Lint
-        run: python -m ruff check src/ tests/
-
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: pip install -e ".[dev,all]"
-      - name: Run tests
-        run: python -m pytest tests/ -v --tb=short
+  ci:
+    uses: phylecorp/cicd/.github/workflows/python-lib.yml@v1
+    permissions:
+      contents: write
+    with:
+      python-version: "3.12"
+      run-lint: true
+      lint-command: "uv run ruff check src/ tests/"
+      test-command: "uv run pytest"
+    secrets: inherit

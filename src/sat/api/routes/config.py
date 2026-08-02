@@ -86,7 +86,15 @@ from sat.api.models import (
     TestProviderRequest,
     TestProviderResponse,
 )
-from sat.config import DEFAULT_MODELS, PROVIDER_API_KEY_ENVS
+from sat.config import (
+    DEFAULT_BASE_URLS,
+    DEFAULT_MODELS,
+    LOCAL_PROVIDERS,
+    PROVIDER_API_KEY_ENVS,
+    PROVIDER_BASE_URL_ENVS,
+    ProviderConfig,
+)
+from sat.providers.local_http import PROBE_TIMEOUT, normalize_host
 from sat.utils.resources import get_sat_resource_path
 
 logger = logging.getLogger(__name__)
@@ -100,12 +108,55 @@ _PROVIDER_KEY_ENVS: dict[str, str] = {
     "gemini": "GEMINI_API_KEY",
     "perplexity": "PERPLEXITY_API_KEY",
     "brave": "BRAVE_API_KEY",
+    "ollama": "OLLAMA_API_KEY",
+    "lmstudio": "LMSTUDIO_API_KEY",
 }
 
 # Some users set GOOGLE_API_KEY instead of GEMINI_API_KEY
 _GEMINI_ALT_KEY = "GOOGLE_API_KEY"
 
-_KNOWN_PROVIDERS = ["anthropic", "openai", "gemini", "perplexity", "brave"]
+_KNOWN_PROVIDERS = [
+    "anthropic",
+    "openai",
+    "gemini",
+    "perplexity",
+    "brave",
+    "ollama",
+    "lmstudio",
+]
+
+
+def _resolve_provider_base_url(name: str, file_entry: dict | object) -> str:
+    """Resolve display base_url for Settings from file > env > default."""
+    file_url = ""
+    if isinstance(file_entry, dict):
+        file_url = file_entry.get("base_url", "") or ""
+    if file_url:
+        return file_url
+    env_var = PROVIDER_BASE_URL_ENVS.get(name)
+    if env_var:
+        env_url = os.environ.get(env_var, "")
+        if env_url:
+            return env_url
+    return DEFAULT_BASE_URLS.get(name, "")
+
+
+def _probe_local_provider(name: str, base_url: str, api_key: str = "") -> bool:
+    """Return True if the local server responds to its native models endpoint."""
+    import httpx
+
+    host = normalize_host(base_url or DEFAULT_BASE_URLS.get(name, ""))
+    if not host:
+        return False
+    headers: dict[str, str] = {}
+    if name == "lmstudio" and api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    path = "/api/tags" if name == "ollama" else "/api/v1/models"
+    try:
+        resp = httpx.get(f"{host}{path}", headers=headers, timeout=PROBE_TIMEOUT)
+        return resp.status_code < 500
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _get_config_path() -> Path:
@@ -160,6 +211,9 @@ def _load_settings(config_path: Path) -> SettingsResponse:
         file_research_model = (
             file_entry.get("research_model", "") if isinstance(file_entry, dict) else ""
         )
+        file_base_url = (
+            file_entry.get("base_url", "") if isinstance(file_entry, dict) else ""
+        )
 
         env_var = _PROVIDER_KEY_ENVS.get(name, f"{name.upper()}_API_KEY")
         env_key = os.environ.get(env_var, "")
@@ -168,7 +222,16 @@ def _load_settings(config_path: Path) -> SettingsResponse:
         if name == "gemini" and not env_key:
             env_key = os.environ.get(_GEMINI_ALT_KEY, "")
 
-        if file_key:
+        if name in LOCAL_PROVIDERS:
+            # Local providers: available when the native server responds.
+            resolved_base = _resolve_provider_base_url(name, file_entry)
+            token = file_key or env_key
+            has_key = _probe_local_provider(name, resolved_base, token)
+            preview = _mask_key(token) if token else ""
+            source = "config_file" if file_key or file_base_url else (
+                "environment" if env_key else "default"
+            )
+        elif file_key:
             has_key = True
             preview = _mask_key(file_key)
             source = "config_file"
@@ -185,12 +248,14 @@ def _load_settings(config_path: Path) -> SettingsResponse:
         # Always prefer the user-saved model from the config file; fall back
         # to DEFAULT_MODELS only when no model has been saved.
         model = file_model or DEFAULT_MODELS.get(name, "")
+        base_url = _resolve_provider_base_url(name, file_entry) if name in LOCAL_PROVIDERS else file_base_url
 
         providers[name] = ProviderSettingsResponse(
             has_api_key=has_key,
             api_key_preview=preview,
             default_model=model,
             research_model=file_research_model,
+            base_url=base_url,
             source=source,
         )
 
@@ -258,6 +323,7 @@ def _save_config(settings: AppSettings, config_path: Path) -> None:
                 "api_key": ps.api_key,
                 "default_model": ps.default_model,
                 "research_model": ps.research_model,
+                **({"base_url": ps.base_url} if ps.base_url else {}),
             }
             for name, ps in settings.providers.items()
         }
@@ -312,6 +378,9 @@ def _apply_to_environ(settings: AppSettings) -> None:
         env_var = PROVIDER_API_KEY_ENVS.get(name, f"{name.upper()}_API_KEY")
         if ps.api_key:
             os.environ[env_var] = ps.api_key
+        base_env = PROVIDER_BASE_URL_ENVS.get(name)
+        if base_env and ps.base_url:
+            os.environ[base_env] = ps.base_url
 
 
 async def _test_provider_connection(req: TestProviderRequest) -> TestProviderResponse:
@@ -392,6 +461,74 @@ async def _test_provider_connection(req: TestProviderRequest) -> TestProviderRes
             resp.raise_for_status()
             return TestProviderResponse(success=True, model_used="brave-search")
 
+        elif provider == "ollama":
+            import httpx
+
+            host = normalize_host(
+                req.base_url
+                or ProviderConfig(provider="ollama").resolve_base_url()
+                or DEFAULT_BASE_URLS["ollama"]
+            )
+            # Prefer a tiny chat when a model is known; otherwise list tags.
+            if model:
+                resp = httpx.post(
+                    f"{host}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Say hello"}],
+                        "stream": False,
+                        "options": {"num_predict": 8},
+                    },
+                    timeout=60.0,
+                )
+                resp.raise_for_status()
+                return TestProviderResponse(success=True, model_used=model)
+            resp = httpx.get(f"{host}/api/tags", timeout=10.0)
+            resp.raise_for_status()
+            names = [m.get("name", "") for m in resp.json().get("models", [])]
+            return TestProviderResponse(
+                success=True,
+                model_used=names[0] if names else "(no models pulled)",
+            )
+
+        elif provider == "lmstudio":
+            import httpx
+
+            host = normalize_host(
+                req.base_url
+                or ProviderConfig(provider="lmstudio").resolve_base_url()
+                or DEFAULT_BASE_URLS["lmstudio"]
+            )
+            headers: dict[str, str] = {}
+            if req.api_key:
+                headers["Authorization"] = f"Bearer {req.api_key}"
+            if model:
+                resp = httpx.post(
+                    f"{host}/api/v1/chat",
+                    headers=headers,
+                    json={
+                        "model": model,
+                        "input": "Say hello",
+                        "stream": False,
+                        "store": False,
+                        "max_output_tokens": 8,
+                    },
+                    timeout=60.0,
+                )
+                resp.raise_for_status()
+                return TestProviderResponse(success=True, model_used=model)
+            resp = httpx.get(f"{host}/api/v1/models", headers=headers, timeout=10.0)
+            resp.raise_for_status()
+            models = [
+                m.get("key", "")
+                for m in resp.json().get("models", [])
+                if m.get("type") == "llm"
+            ]
+            return TestProviderResponse(
+                success=True,
+                model_used=models[0] if models else "(no LLM models)",
+            )
+
     except Exception as exc:  # noqa: BLE001
         # Log full traceback server-side. Return a sanitized message that
         # omits internal details but retains enough for the user to act on
@@ -439,7 +576,12 @@ async def list_providers() -> list[ProviderInfo]:
         file_key = file_entry.get("api_key", "") if isinstance(file_entry, dict) else ""
         file_model = file_entry.get("default_model", "") if isinstance(file_entry, dict) else ""
 
-        if file_key:
+        if name in LOCAL_PROVIDERS:
+            resolved_base = _resolve_provider_base_url(name, file_entry)
+            env_var = _PROVIDER_KEY_ENVS.get(name, f"{name.upper()}_API_KEY")
+            token = file_key or os.environ.get(env_var, "")
+            has_key = _probe_local_provider(name, resolved_base, token)
+        elif file_key:
             has_key = True
         else:
             env_var = _PROVIDER_KEY_ENVS.get(name, f"{name.upper()}_API_KEY")
@@ -505,6 +647,9 @@ async def update_settings(settings: AppSettings) -> SettingsResponse:
             "research_model": ps.research_model or (
                 existing_entry.get("research_model", "") if isinstance(existing_entry, dict) else ""
             ),
+            "base_url": ps.base_url or (
+                existing_entry.get("base_url", "") if isinstance(existing_entry, dict) else ""
+            ),
         }
 
     merged = AppSettings(
@@ -513,6 +658,7 @@ async def update_settings(settings: AppSettings) -> SettingsResponse:
                 api_key=v.get("api_key", "") if isinstance(v, dict) else "",
                 default_model=v.get("default_model", "") if isinstance(v, dict) else "",
                 research_model=v.get("research_model", "") if isinstance(v, dict) else "",
+                base_url=v.get("base_url", "") if isinstance(v, dict) else "",
             )
             for name, v in existing_providers.items()
         },

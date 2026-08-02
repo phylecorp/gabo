@@ -47,7 +47,17 @@ DEFAULT_MODELS = {
     "anthropic": "claude-opus-4-6",
     "openai": "o3",
     "gemini": "gemini-2.5-pro",
+    # Local defaults are empty — model is chosen from whatever is installed/loaded.
+    "ollama": "",
+    "lmstudio": "",
 }
+
+DEFAULT_BASE_URLS = {
+    "ollama": "http://127.0.0.1:11434",
+    "lmstudio": "http://127.0.0.1:1234",
+}
+
+LOCAL_PROVIDERS = frozenset({"ollama", "lmstudio"})
 
 # Curated model lists for providers without a model listing API.
 # These are used both as the primary list (Anthropic, Perplexity) and as
@@ -103,9 +113,11 @@ DEFAULT_RESEARCH_MODELS = {
 }
 
 CHALLENGER_PREFERENCE = {
-    "anthropic": ["openai", "gemini"],
-    "openai": ["anthropic", "gemini"],
-    "gemini": ["anthropic", "openai"],
+    "anthropic": ["openai", "gemini", "ollama", "lmstudio"],
+    "openai": ["anthropic", "gemini", "ollama", "lmstudio"],
+    "gemini": ["anthropic", "openai", "ollama", "lmstudio"],
+    "ollama": ["anthropic", "openai", "gemini", "lmstudio"],
+    "lmstudio": ["anthropic", "openai", "gemini", "ollama"],
 }
 
 PROVIDER_API_KEY_ENVS = {
@@ -114,6 +126,14 @@ PROVIDER_API_KEY_ENVS = {
     "gemini": "GEMINI_API_KEY",
     "perplexity": "PERPLEXITY_API_KEY",
     "brave": "BRAVE_API_KEY",
+    # Optional — Ollama ignores keys; LM Studio uses a Bearer token when auth is enabled.
+    "ollama": "OLLAMA_API_KEY",
+    "lmstudio": "LMSTUDIO_API_KEY",
+}
+
+PROVIDER_BASE_URL_ENVS = {
+    "ollama": "OLLAMA_BASE_URL",
+    "lmstudio": "LMSTUDIO_BASE_URL",
 }
 
 
@@ -225,6 +245,19 @@ def _load_config_file_model(provider: str) -> str | None:
         data = json.loads(config_path.read_text())
         model = data.get("providers", {}).get(provider, {}).get("default_model", "")
         return model if model else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _load_config_file_base_url(provider: str) -> str | None:
+    """Read the base_url for *provider* from ~/.sat/config.json, if present."""
+    config_path = _get_sat_config_path()
+    if not config_path.exists():
+        return None
+    try:
+        data = json.loads(config_path.read_text())
+        base_url = data.get("providers", {}).get(provider, {}).get("base_url", "")
+        return base_url if base_url else None
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -362,19 +395,33 @@ def resolve_research_model(provider: str) -> str:
     return DEFAULT_RESEARCH_MODELS.get(provider, "")
 
 
+def _provider_has_credentials(provider: str) -> bool:
+    """Return True if *provider* looks configured for use.
+
+    Cloud providers need an API key. Local providers (ollama, lmstudio) are
+    considered available when a base URL is configured or the built-in default
+    host applies — reachability is checked at request / Settings probe time.
+    """
+    if provider in LOCAL_PROVIDERS:
+        return True
+    env_var = PROVIDER_API_KEY_ENVS.get(provider, f"{provider.upper()}_API_KEY")
+    return bool(os.environ.get(env_var)) or bool(_load_config_file_key(provider))
+
+
 def resolve_challenger_provider(primary_provider: str) -> tuple[str, str] | None:
     """Find the best available challenger provider different from primary.
 
-    Checks env vars and config file to find a provider with an API key configured.
+    Checks env vars and config file to find a provider with an API key configured
+    (or a local provider, which needs no cloud key).
     Returns (provider_name, resolved_model) or None if no other provider available.
     """
-    preferences = CHALLENGER_PREFERENCE.get(primary_provider, ["anthropic", "openai", "gemini"])
+    preferences = CHALLENGER_PREFERENCE.get(
+        primary_provider, ["anthropic", "openai", "gemini", "ollama", "lmstudio"]
+    )
     for candidate in preferences:
         if candidate == primary_provider:
             continue
-        env_var = PROVIDER_API_KEY_ENVS.get(candidate, f"{candidate.upper()}_API_KEY")
-        has_key = bool(os.environ.get(env_var)) or bool(_load_config_file_key(candidate))
-        if has_key:
+        if _provider_has_credentials(candidate):
             resolved = ProviderConfig(provider=candidate).resolve_model()
             return (candidate, resolved)
     return None
@@ -388,17 +435,15 @@ def resolve_investigator_provider(
     Iterates all known providers and returns the first one that:
     - Is not primary_provider
     - Is not challenger_provider
-    - Has an API key configured in the environment or config file
+    - Has credentials configured (API key for cloud; local hosts always qualify)
 
     Returns (provider_name, resolved_model) or None if no third provider available.
     """
-    all_providers = ["anthropic", "openai", "gemini"]
+    all_providers = ["anthropic", "openai", "gemini", "ollama", "lmstudio"]
     for candidate in all_providers:
         if candidate == primary_provider or candidate == challenger_provider:
             continue
-        env_var = PROVIDER_API_KEY_ENVS.get(candidate, f"{candidate.upper()}_API_KEY")
-        has_key = bool(os.environ.get(env_var)) or bool(_load_config_file_key(candidate))
-        if has_key:
+        if _provider_has_credentials(candidate):
             resolved = ProviderConfig(provider=candidate).resolve_model()
             return (candidate, resolved)
     return None
@@ -419,28 +464,23 @@ class ProviderConfig(BaseModel):
     base_url: str | None = Field(default=None, description="Custom API base URL")
 
     def resolve_api_key(self) -> str:
-        """Resolve API key: explicit field > config file > env var, or raise."""
-        if self.api_key:
-            return self.api_key
+        """Resolve API key: explicit field > config file > env var, or raise.
 
-        # Check ~/.sat/config.json
-        file_key = _load_config_file_key(self.provider)
-        if file_key:
-            return file_key
-
-        env_map = {
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "gemini": "GEMINI_API_KEY",
-        }
-        env_var = env_map.get(self.provider, f"{self.provider.upper()}_API_KEY")
-        key = os.environ.get(env_var)
-        if not key:
-            raise ValueError(
-                f"No API key found. Set --api-key, save via Settings UI, "
-                f"or set the {env_var} environment variable."
-            )
-        return key
+        Local providers (ollama, lmstudio) do not require a key — returns "" when
+        none is configured so callers can still construct a client.
+        """
+        key = self.try_resolve_api_key()
+        if key:
+            return key
+        if self.provider in LOCAL_PROVIDERS:
+            return ""
+        env_var = PROVIDER_API_KEY_ENVS.get(
+            self.provider, f"{self.provider.upper()}_API_KEY"
+        )
+        raise ValueError(
+            f"No API key found. Set --api-key, save via Settings UI, "
+            f"or set the {env_var} environment variable."
+        )
 
     def try_resolve_api_key(self) -> str | None:
         """Resolve API key from explicit field, config file, or env var; return None if not found."""
@@ -452,13 +492,31 @@ class ProviderConfig(BaseModel):
         if file_key:
             return file_key
 
-        env_map = {
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "gemini": "GEMINI_API_KEY",
-        }
-        env_var = env_map.get(self.provider, f"{self.provider.upper()}_API_KEY")
+        env_var = PROVIDER_API_KEY_ENVS.get(
+            self.provider, f"{self.provider.upper()}_API_KEY"
+        )
         return os.environ.get(env_var)
+
+    def resolve_base_url(self) -> str | None:
+        """Resolve base URL: explicit field > config file > env var > built-in default.
+
+        Returns None for cloud providers with no custom URL. Local providers always
+        resolve to at least the built-in default host.
+        """
+        if self.base_url:
+            return self.base_url
+
+        file_url = _load_config_file_base_url(self.provider)
+        if file_url:
+            return file_url
+
+        env_var = PROVIDER_BASE_URL_ENVS.get(self.provider)
+        if env_var:
+            env_url = os.environ.get(env_var, "")
+            if env_url:
+                return env_url
+
+        return DEFAULT_BASE_URLS.get(self.provider)
 
     def resolve_model(self) -> str:
         """Resolve model: explicit value > config file > env var > built-in default."""
@@ -474,6 +532,8 @@ class ProviderConfig(BaseModel):
             "anthropic": "ANTHROPIC_MODEL",
             "openai": "OPENAI_MODEL",
             "gemini": "GEMINI_MODEL",
+            "ollama": "OLLAMA_MODEL",
+            "lmstudio": "LMSTUDIO_MODEL",
         }
         env_var = env_map.get(self.provider, f"{self.provider.upper()}_MODEL")
         return os.environ.get(env_var, DEFAULT_MODELS.get(self.provider, "claude-opus-4-6"))

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 class ProviderRef(BaseModel):
     """Reference to a named provider configuration."""
 
-    provider: str = Field(description="Provider type: 'anthropic', 'openai', 'gemini'")
+    provider: str = Field(description="Provider type: 'anthropic', 'openai', 'gemini', 'ollama', 'lmstudio'")
     model: str = Field(description="Model identifier")
     api_key: str | None = Field(default=None, description="API key (falls back to env var)")
 

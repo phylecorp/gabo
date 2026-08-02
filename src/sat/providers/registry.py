@@ -34,9 +34,18 @@ def create_provider(
         from sat.providers.gemini import GeminiProvider
 
         provider = GeminiProvider(config)
+    elif config.provider == "ollama":
+        from sat.providers.ollama import OllamaProvider
+
+        provider = OllamaProvider(config)
+    elif config.provider == "lmstudio":
+        from sat.providers.lmstudio import LMStudioProvider
+
+        provider = LMStudioProvider(config)
     else:
         raise ValueError(
-            f"Unknown provider: {config.provider!r}. Available: anthropic, openai, gemini"
+            f"Unknown provider: {config.provider!r}. "
+            "Available: anthropic, openai, gemini, ollama, lmstudio"
         )
 
     if rate_limiter is not None:

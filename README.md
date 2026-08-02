@@ -80,7 +80,7 @@ From the dashboard, click **New Analysis**. The form walks you through everythin
 2. **Write your question** — the intelligence question you want analyzed. This is the only required field.
 3. **Provide evidence** (optional) — paste reports, source material, or intelligence directly into the text area. You can also attach source documents (PDF, DOCX, HTML, images, URLs) and Gabo will ingest them automatically.
 4. **Select techniques** — pick specific techniques from the 12 available, or leave it blank and Gabo will auto-select based on your question.
-5. **Choose a provider** — select which LLM provider to use (Anthropic, OpenAI, or Gemini). Gabo shows which providers have valid API keys configured.
+5. **Choose a provider** — select which LLM provider to use (Anthropic, OpenAI, Gemini, Ollama, or LM Studio). Gabo shows which providers have valid API keys or a reachable local server.
 6. **Set advanced options** — toggle web research (automatic evidence gathering from external sources), adversarial review (a second model critiques each technique output), and report generation.
 
 You have two ways to launch:
@@ -340,6 +340,22 @@ Environment variables for MCP configuration are documented in `.env.example`.
 | `anthropic` (default) | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
 | `openai` | `OPENAI_API_KEY` | `o3` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-pro` |
+| `ollama` | — (local native API) | first pulled model / Settings |
+| `lmstudio` | `LMSTUDIO_API_KEY` (optional) | first loaded LLM / Settings |
+
+**Local LLMs (native APIs, not OpenAI-compat):**
+
+| Provider | Default host | Chat endpoint | List models |
+|----------|--------------|---------------|-------------|
+| Ollama | `http://127.0.0.1:11434` (`OLLAMA_BASE_URL`) | `POST /api/chat` | `GET /api/tags` |
+| LM Studio | `http://127.0.0.1:1234` (`LMSTUDIO_BASE_URL`) | `POST /api/v1/chat` | `GET /api/v1/models` |
+
+Start Ollama or LM Studio’s local server, then select the provider in Settings / New Analysis (or `sat analyze -p ollama`). Live connectivity tests:
+
+```bash
+make test-local-llms
+# or: pytest -m integration tests/test_providers/test_local_llm_live.py -v
+```
 
 ### Research providers
 

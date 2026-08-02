@@ -44,6 +44,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: 'Google Gemini',
   perplexity: 'Perplexity',
   brave: 'Brave Search',
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
 }
 
 const PROVIDER_MODEL_PLACEHOLDERS: Record<string, string> = {
@@ -52,6 +54,8 @@ const PROVIDER_MODEL_PLACEHOLDERS: Record<string, string> = {
   gemini: 'gemini-2.5-pro',
   perplexity: 'sonar-deep-research',
   brave: '',
+  ollama: 'llama3.2',
+  lmstudio: 'model-key-from-lm-studio',
 }
 
 /**
@@ -62,16 +66,35 @@ const PROVIDER_MODEL_PLACEHOLDERS: Record<string, string> = {
  */
 const HIDE_MODEL_PROVIDERS = new Set(['brave'])
 
+/** Local native-API providers — no cloud API key required. */
+const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio'])
+
+/** Ollama ignores auth; hide the API key field entirely. */
+const HIDE_API_KEY_PROVIDERS = new Set(['ollama'])
+
+const DEFAULT_BASE_URLS: Record<string, string> = {
+  ollama: 'http://127.0.0.1:11434',
+  lmstudio: 'http://127.0.0.1:1234',
+}
+
 interface ProviderDraft {
   api_key: string
   default_model: string
   research_model: string
+  base_url: string
   editing_key: boolean  // true while the user is actively entering a new key
   show_key: boolean     // show the raw input value while typing
 }
 
 function makeInitialDraft(): ProviderDraft {
-  return { api_key: '', default_model: '', research_model: '', editing_key: false, show_key: false }
+  return {
+    api_key: '',
+    default_model: '',
+    research_model: '',
+    base_url: '',
+    editing_key: false,
+    show_key: false,
+  }
 }
 
 interface TestState {
@@ -103,6 +126,7 @@ export default function Settings() {
         api_key: '',
         default_model: serverInfo.default_model ?? '',
         research_model: serverInfo.research_model ?? '',
+        base_url: serverInfo.base_url ?? DEFAULT_BASE_URLS[name] ?? '',
         editing_key: false,
         show_key: false,
       }
@@ -137,6 +161,10 @@ export default function Settings() {
     setDraft(name, { research_model: value })
   }
 
+  function handleBaseUrlChange(name: string, value: string) {
+    setDraft(name, { base_url: value })
+  }
+
   function handleRemoveKey(name: string) {
     setDraft(name, { editing_key: true, api_key: '', show_key: false })
   }
@@ -144,9 +172,10 @@ export default function Settings() {
   async function handleTestProvider(name: string) {
     const draft = getDraft(name)
     const serverInfo: ProviderSettingsResponse | undefined = providers[name]
-    // Use draft key if editing, otherwise we can't test (no key to test with)
+    const isLocal = LOCAL_PROVIDERS.has(name)
+    // Local providers can be tested without a key; cloud providers need one.
     const keyToTest = draft.api_key || ''
-    if (!keyToTest) return
+    if (!isLocal && !keyToTest) return
 
     setTestStates(prev => ({
       ...prev,
@@ -158,6 +187,9 @@ export default function Settings() {
         provider: name,
         api_key: keyToTest,
         model: draft.default_model || serverInfo?.default_model || undefined,
+        base_url: isLocal
+          ? (draft.base_url || serverInfo?.base_url || DEFAULT_BASE_URLS[name])
+          : undefined,
       })
       setTestStates(prev => ({
         ...prev,
@@ -179,7 +211,12 @@ export default function Settings() {
     setSaveError(null)
 
     // Build the payload: include every provider in drafts
-    const providerPayload: Record<string, { api_key: string; default_model: string; research_model?: string }> = {}
+    const providerPayload: Record<string, {
+      api_key: string
+      default_model: string
+      research_model?: string
+      base_url?: string
+    }> = {}
 
     for (const name of Object.keys(providers)) {
       const draft = getDraft(name)
@@ -191,11 +228,15 @@ export default function Settings() {
       const apiKey = draft.editing_key ? draft.api_key : ''
       const model = draft.default_model || serverInfo?.default_model || ''
       const researchModel = draft.research_model || serverInfo?.research_model || ''
+      const baseUrl = LOCAL_PROVIDERS.has(name)
+        ? (draft.base_url || serverInfo?.base_url || DEFAULT_BASE_URLS[name] || '')
+        : ''
 
       providerPayload[name] = {
         api_key: apiKey,
         default_model: model,
         research_model: researchModel,
+        ...(baseUrl ? { base_url: baseUrl } : {}),
       }
     }
 
@@ -254,6 +295,8 @@ export default function Settings() {
             label={PROVIDER_LABELS[name] ?? name}
             modelPlaceholder={PROVIDER_MODEL_PLACEHOLDERS[name] ?? ''}
             hideModel={HIDE_MODEL_PROVIDERS.has(name)}
+            hideApiKey={HIDE_API_KEY_PROVIDERS.has(name)}
+            isLocal={LOCAL_PROVIDERS.has(name)}
             info={info}
             draft={getDraft(name)}
             testState={testStates[name] ?? { loading: false, result: null }}
@@ -262,6 +305,7 @@ export default function Settings() {
             onKeyChange={(v) => handleKeyChange(name, v)}
             onModelChange={(v) => handleModelChange(name, v)}
             onResearchModelChange={(v) => handleResearchModelChange(name, v)}
+            onBaseUrlChange={(v) => handleBaseUrlChange(name, v)}
             onRemoveKey={() => handleRemoveKey(name)}
             onTestProvider={() => handleTestProvider(name)}
             onToggleShowKey={() => setDraft(name, { show_key: !getDraft(name).show_key })}
@@ -1009,6 +1053,8 @@ function AdversarialSettingsCard() {
             <option value="anthropic">Anthropic</option>
             <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
+            <option value="ollama">Ollama</option>
+            <option value="lmstudio">LM Studio</option>
           </select>
           {challengerProvider && challengerModels.analysis.length > 0 ? (
             <ModelSelect
@@ -1051,6 +1097,8 @@ function AdversarialSettingsCard() {
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI</option>
               <option value="gemini">Gemini</option>
+              <option value="ollama">Ollama</option>
+              <option value="lmstudio">LM Studio</option>
             </select>
             {investigatorProvider && investigatorModels.analysis.length > 0 ? (
               <ModelSelect
@@ -1260,6 +1308,10 @@ interface ProviderCardProps {
   modelPlaceholder: string
   /** When true, the Default Model section is hidden (e.g. Brave Search has no model). */
   hideModel?: boolean
+  /** When true, hide the API key section (Ollama ignores auth). */
+  hideApiKey?: boolean
+  /** Local native HTTP providers — show Base URL + always allow Test Connection. */
+  isLocal?: boolean
   info: ProviderSettingsResponse
   draft: ProviderDraft
   testState: TestState
@@ -1268,6 +1320,7 @@ interface ProviderCardProps {
   onKeyChange: (value: string) => void
   onModelChange: (value: string) => void
   onResearchModelChange: (value: string) => void
+  onBaseUrlChange: (value: string) => void
   onRemoveKey: () => void
   onTestProvider: () => void
   onToggleShowKey: () => void
@@ -1278,6 +1331,8 @@ function ProviderCard({
   label,
   modelPlaceholder,
   hideModel = false,
+  hideApiKey = false,
+  isLocal = false,
   info,
   draft,
   testState,
@@ -1286,6 +1341,7 @@ function ProviderCard({
   onKeyChange,
   onModelChange,
   onResearchModelChange,
+  onBaseUrlChange,
   onRemoveKey,
   onTestProvider,
   onToggleShowKey,
@@ -1315,7 +1371,7 @@ function ProviderCard({
         <div className="settings-provider-name-row">
           <span className="settings-provider-name">{label}</span>
           <span className={`intel-badge ${isConnected ? 'badge-green' : 'badge-red'}`}>
-            {isConnected ? 'Connected' : 'Not configured'}
+            {isConnected ? (isLocal ? 'Server reachable' : 'Connected') : (isLocal ? 'Server offline' : 'Not configured')}
           </span>
         </div>
         <div className="settings-provider-dot-row">
@@ -1323,11 +1379,53 @@ function ProviderCard({
         </div>
       </div>
 
-      {/* API Key section */}
-      <div className="form-section form-section-spaced">
-        <label className="form-label" htmlFor={`key-${name}`}>API Key</label>
+      {/* Base URL for local providers */}
+      {isLocal && (
+        <div className="form-section form-section-spaced">
+          <label className="form-label" htmlFor={`base-url-${name}`}>Base URL</label>
+          <input
+            id={`base-url-${name}`}
+            type="text"
+            className="model-override-input"
+            value={draft.base_url || DEFAULT_BASE_URLS[name] || ''}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => onBaseUrlChange(e.target.value)}
+            placeholder={DEFAULT_BASE_URLS[name]}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <p className="text-muted text-xs" style={{ marginTop: '0.35rem' }}>
+            Native API host (no OpenAI-compat /v1 path). Default: {DEFAULT_BASE_URLS[name]}
+          </p>
+          <div className="settings-key-edit-actions" style={{ marginTop: '0.5rem' }}>
+            <button
+              className="btn-secondary settings-btn-sm"
+              onClick={onTestProvider}
+              disabled={testState.loading}
+              type="button"
+            >
+              {testState.loading ? 'Testing...' : 'Test Connection'}
+            </button>
+          </div>
+          {testState.result && (
+            <div
+              className={`settings-test-result text-xs ${testState.result.success ? 'settings-test-ok' : 'settings-test-fail'}`}
+            >
+              {testState.result.success
+                ? `Connected — model: ${testState.result.model_used}`
+                : `Failed: ${testState.result.error}`}
+            </div>
+          )}
+        </div>
+      )}
 
-        {!isEditingKey && info.has_api_key && (
+      {/* API Key section — hidden for Ollama; optional token for LM Studio */}
+      {!hideApiKey && (
+      <div className="form-section form-section-spaced">
+        <label className="form-label" htmlFor={`key-${name}`}>
+          {isLocal ? 'API Token (optional)' : 'API Key'}
+        </label>
+
+        {!isEditingKey && info.api_key_preview && (
           <div className="settings-key-row">
             <span className="settings-key-preview font-mono text-xs text-secondary">
               {info.api_key_preview}
@@ -1346,9 +1444,9 @@ function ProviderCard({
           </div>
         )}
 
-        {!isEditingKey && !info.has_api_key && (
+        {!isEditingKey && !info.api_key_preview && (
           <button className="btn-secondary settings-btn-sm" onClick={onStartEditKey}>
-            Add API Key
+            {isLocal ? 'Add API Token' : 'Add API Key'}
           </button>
         )}
 
@@ -1361,7 +1459,7 @@ function ProviderCard({
                 className="model-override-input settings-key-input"
                 value={draft.api_key}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => onKeyChange(e.target.value)}
-                placeholder={`Enter ${label} API key`}
+                placeholder={isLocal ? `Optional ${label} token` : `Enter ${label} API key`}
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -1375,7 +1473,7 @@ function ProviderCard({
               </button>
             </div>
             <div className="settings-key-edit-actions">
-              {draft.api_key && (
+              {(draft.api_key || isLocal) && (
                 <button
                   className="btn-secondary settings-btn-sm"
                   onClick={onTestProvider}
@@ -1388,7 +1486,7 @@ function ProviderCard({
                 Cancel
               </button>
             </div>
-            {testState.result && (
+            {testState.result && !isLocal && (
               <div
                 className={`settings-test-result text-xs ${testState.result.success ? 'settings-test-ok' : 'settings-test-fail'}`}
               >
@@ -1400,6 +1498,7 @@ function ProviderCard({
           </div>
         )}
       </div>
+      )}
 
       {/* Analysis model section — hidden for providers without a model concept (e.g. Brave Search) */}
       {!hideModel && (

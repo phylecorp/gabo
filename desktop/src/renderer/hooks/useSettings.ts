@@ -40,7 +40,7 @@ export function useTestProvider() {
   const { client } = useApiContext()
 
   return useMutation({
-    mutationFn: (req: { provider: string; api_key: string; model?: string }) =>
+    mutationFn: (req: { provider: string; api_key?: string; model?: string; base_url?: string }) =>
       client!.testProvider(req),
   })
 }

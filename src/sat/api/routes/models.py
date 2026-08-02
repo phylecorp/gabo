@@ -374,6 +374,76 @@ def _gemini_display_name(model_id: str) -> str:
     return model_id.replace("-", " ").title()
 
 
+def _local_host(provider: str) -> str:
+    """Resolve host for a local provider from config / env / default."""
+    from sat.config import DEFAULT_BASE_URLS, ProviderConfig
+    from sat.providers.local_http import normalize_host
+
+    host = ProviderConfig(provider=provider).resolve_base_url() or DEFAULT_BASE_URLS.get(
+        provider, ""
+    )
+    return normalize_host(host)
+
+
+def _list_ollama() -> tuple[dict[str, list[dict]], str | None]:
+    """List models from Ollama native GET /api/tags."""
+    host = _local_host("ollama")
+    try:
+        response = httpx.get(f"{host}/api/tags", timeout=5.0)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Ollama model listing failed: %s", exc)
+        return {"analysis": [], "research": []}, str(exc)
+
+    analysis: list[dict] = []
+    for m in data.get("models", []):
+        name = m.get("name") or m.get("model") or ""
+        if not name:
+            continue
+        analysis.append({"id": name, "name": name})
+    analysis.sort(key=lambda x: x["id"])
+    if analysis:
+        analysis[0]["default"] = True
+    return {"analysis": analysis, "research": []}, None
+
+
+def _list_lmstudio() -> tuple[dict[str, list[dict]], str | None]:
+    """List models from LM Studio native GET /api/v1/models."""
+    from sat.config import ProviderConfig
+
+    host = _local_host("lmstudio")
+    headers: dict[str, str] = {}
+    token = ProviderConfig(provider="lmstudio").try_resolve_api_key()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        response = httpx.get(f"{host}/api/v1/models", headers=headers, timeout=5.0)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LM Studio model listing failed: %s", exc)
+        return {"analysis": [], "research": []}, str(exc)
+
+    analysis: list[dict] = []
+    for m in data.get("models", []):
+        if m.get("type") != "llm":
+            continue
+        key = m.get("key") or ""
+        if not key:
+            continue
+        display = m.get("display_name") or key
+        entry: dict = {"id": key, "name": display}
+        if m.get("loaded_instances"):
+            entry["default"] = True
+        analysis.append(entry)
+    # Prefer loaded models as default; otherwise first alphabetically
+    analysis.sort(key=lambda x: (not x.get("default", False), x["id"]))
+    if analysis and not any(m.get("default") for m in analysis):
+        analysis[0]["default"] = True
+    return {"analysis": analysis, "research": []}, None
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -392,6 +462,8 @@ async def list_models(provider: str) -> dict:
     - brave: empty lists (search API, no model concept)
     - openai: fetched via openai.models.list(), fallback to curated on failure
     - gemini: fetched via REST API (generativelanguage.googleapis.com), fallback to curated on failure
+    - ollama: native GET /api/tags
+    - lmstudio: native GET /api/v1/models
 
     Returns:
         {
@@ -403,7 +475,15 @@ async def list_models(provider: str) -> dict:
     """
     provider = provider.lower()
 
-    known_providers = {"anthropic", "openai", "gemini", "perplexity", "brave"}
+    known_providers = {
+        "anthropic",
+        "openai",
+        "gemini",
+        "perplexity",
+        "brave",
+        "ollama",
+        "lmstudio",
+    }
     if provider not in known_providers:
         return {
             "provider": provider,
@@ -435,6 +515,10 @@ async def list_models(provider: str) -> dict:
         models, error = _list_openai(api_key)
     elif provider == "gemini":
         models, error = _list_gemini(api_key)
+    elif provider == "ollama":
+        models, error = _list_ollama()
+    elif provider == "lmstudio":
+        models, error = _list_lmstudio()
     else:
         models = {"analysis": [], "research": []}
 

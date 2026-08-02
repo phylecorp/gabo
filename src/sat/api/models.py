@@ -164,6 +164,7 @@ class ProviderSettings(BaseModel):
     api_key: str = ""
     default_model: str = ""
     research_model: str = ""
+    base_url: str = ""
 
 
 class TechniqueOverrideSettings(BaseModel):
@@ -216,6 +217,7 @@ class ProviderSettingsResponse(BaseModel):
     api_key_preview: str = ""
     default_model: str = ""
     research_model: str = ""
+    base_url: str = ""
     source: str = "default"  # "config_file", "environment", "default"
 
 
@@ -228,11 +230,12 @@ class SettingsResponse(BaseModel):
 
 
 class TestProviderRequest(BaseModel):
-    """Request to test a provider API key."""
+    """Request to test a provider API key / local server connection."""
 
     provider: str
-    api_key: str
+    api_key: str = ""
     model: str | None = None
+    base_url: str | None = None
 
 
 class TestProviderResponse(BaseModel):

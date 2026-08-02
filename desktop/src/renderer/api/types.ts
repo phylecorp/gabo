@@ -216,6 +216,7 @@ export interface ProviderSettings {
   api_key: string
   default_model: string
   research_model?: string
+  base_url?: string
 }
 
 export interface AdversarialSettings {
@@ -239,6 +240,7 @@ export interface ProviderSettingsResponse {
   api_key_preview: string
   default_model: string
   research_model: string
+  base_url?: string
   source: string
 }
 
@@ -269,8 +271,9 @@ export interface SettingsResponse {
 
 export interface TestProviderRequest {
   provider: string
-  api_key: string
+  api_key?: string
   model?: string
+  base_url?: string
 }
 
 export interface TestProviderResponse {

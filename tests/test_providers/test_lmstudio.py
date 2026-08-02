@@ -60,7 +60,7 @@ async def test_generate_posts_native_v1_chat(provider: LMStudioProvider):
 
 
 @pytest.mark.asyncio
-async def test_generate_ignores_non_message_output(provider: LMStudioProvider):
+async def test_generate_prefers_message_over_reasoning(provider: LMStudioProvider):
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = {
@@ -74,6 +74,22 @@ async def test_generate_ignores_non_message_output(provider: LMStudioProvider):
         result = await provider.generate("sys", [LLMMessage(role="user", content="hi")])
 
     assert result.text == "final"
+
+
+@pytest.mark.asyncio
+async def test_generate_falls_back_to_reasoning_when_no_message(provider: LMStudioProvider):
+    """Short max_tokens on reasoning models can yield only type=reasoning."""
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "output": [{"type": "reasoning", "content": "thinking out loud"}],
+        "stats": {"input_tokens": 10, "total_output_tokens": 20},
+    }
+
+    with patch.object(provider._client, "post", new=AsyncMock(return_value=mock_response)):
+        result = await provider.generate("sys", [LLMMessage(role="user", content="hi")])
+
+    assert result.text == "thinking out loud"
 
 
 @pytest.mark.asyncio

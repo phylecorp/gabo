@@ -128,10 +128,12 @@ async def test_lmstudio_live_generate():
         ProviderConfig(provider="lmstudio", model=model, base_url=DEFAULT_LMSTUDIO_HOST)
     )
     try:
+        # Reasoning models (e.g. phi-4-mini-reasoning) may spend a small
+        # token budget entirely on reasoning before emitting a message.
         result = await provider.generate(
             "Reply briefly.",
             [LLMMessage(role="user", content="Say hello in one short word.")],
-            max_tokens=32,
+            max_tokens=128,
             temperature=0.1,
         )
     finally:
@@ -157,7 +159,7 @@ async def test_lmstudio_live_structured():
             "Return JSON only.",
             [LLMMessage(role="user", content='Produce greeting="hi"')],
             _HelloSchema,
-            max_tokens=64,
+            max_tokens=256,
             temperature=0.1,
         )
     finally:

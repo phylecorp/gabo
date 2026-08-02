@@ -58,17 +58,30 @@ class LMStudioProvider:
         return "\n\n".join(parts)
 
     def _extract_message_text(self, data: dict[str, Any]) -> str:
-        """Concatenate ``output`` items with type == message."""
-        parts: list[str] = []
+        """Extract assistant text from LM Studio v1 ``output`` items.
+
+        Prefer ``type == "message"``. Reasoning-only models (e.g. phi-4-mini-
+        reasoning) may spend a short ``max_output_tokens`` budget entirely on
+        ``type == "reasoning"`` with no message item — fall back to reasoning
+        content rather than returning an empty string when tokens were produced.
+        """
+        messages: list[str] = []
+        reasoning: list[str] = []
         for item in data.get("output") or []:
             if not isinstance(item, dict):
                 continue
-            if item.get("type") == "message":
-                content = item.get("content")
-                if content:
-                    parts.append(str(content))
-        if parts:
-            return "\n".join(parts)
+            content = item.get("content")
+            if not content:
+                continue
+            item_type = item.get("type")
+            if item_type == "message":
+                messages.append(str(content))
+            elif item_type == "reasoning":
+                reasoning.append(str(content))
+        if messages:
+            return "\n".join(messages)
+        if reasoning:
+            return "\n".join(reasoning)
         # Fallback for unexpected shapes
         return str(data.get("content") or data.get("text") or "")
 
